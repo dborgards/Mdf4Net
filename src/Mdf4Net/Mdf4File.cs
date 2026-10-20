@@ -111,7 +111,17 @@ public sealed class Mdf4File : IDisposable
         options ??= Mdf4ReaderOptions.Default;
         options.Validate();
         var file = new Mdf4File(stream, leaveOpen, options);
-        file.Load();
+        try
+        {
+            file.Load();
+        }
+        catch
+        {
+            // No Mdf4File reaches the caller, so nobody else can release the stream.
+            file.Dispose();
+            throw;
+        }
+
         return file;
     }
 

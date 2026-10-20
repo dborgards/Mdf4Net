@@ -347,6 +347,11 @@ public sealed class Mdf4Channel
     {
         if (_dataLink == 0)
         {
+            if (ChannelType == Mdf4ChannelType.MaximumLength)
+            {
+                throw Mdf4FormatException.At(Offset, $"Maximum-length channel '{Name}' has no size channel");
+            }
+
             return;
         }
 
@@ -593,12 +598,12 @@ public sealed class Mdf4Channel
         }
 
         double length = _lengthChannel.DecodeRawNumber(record, index);
-        if (length < 0 || double.IsNaN(length))
+        if (!(length >= 0 && length <= field.Length))
         {
-            return ReadOnlySpan<byte>.Empty;
+            throw Mdf4FormatException.At(Offset, $"Maximum-length channel '{Name}' declares {length} bytes in a field of {field.Length}");
         }
 
-        return field.Slice(0, (int)Math.Min(field.Length, length));
+        return field.Slice(0, (int)length);
     }
 
     private ReadOnlySpan<byte> SignalDataAt(ReadOnlySpan<byte> record)

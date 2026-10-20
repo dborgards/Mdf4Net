@@ -260,6 +260,11 @@ internal static class CanDataFrameReader
 
             double time = master is null ? index : Physical(master, span, index);
             ulong rawId = (ulong)id.DecodeRawNumber(span, index);
+            if ((rawId & ~0x9FFFFFFFUL) != 0)
+            {
+                throw Mdf4FormatException.At(id.Offset, $"CAN frame {index} has the identifier 0x{rawId:X}, which has bits beyond the 29-bit identifier and the extended marker");
+            }
+
             bool extended = ide is not null ? Flag(ide, span, index) : (rawId & 0x80000000UL) != 0;
             uint frameId = (uint)(rawId & 0x1FFFFFFF);
             bool fd = edl is not null && Flag(edl, span, index);

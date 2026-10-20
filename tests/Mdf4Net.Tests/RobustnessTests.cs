@@ -774,6 +774,78 @@ public class RobustnessTests
     }
 
     [Fact]
+    public void A_Maximum_Length_Channel_Without_A_Size_Link_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 4, 0, frame), raw.DataBlock(new byte[] { 1, 2, 0, 0 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*has no size channel*");
+    }
+
+    [Theory]
+    [InlineData(5, false)]
+    [InlineData(255, false)]
+    [InlineData(-1, true)]
+    public void A_Maximum_Length_Size_Outside_The_Field_Is_A_Format_Error(int size, bool signed)
+    {
+        // frame: four reserved bytes @0, size @4 (u8 or i8).
+        var raw = new RawMdf();
+        PendingBlock sizeChannel = raw.Channel("size", Mdf4ChannelType.FixedLength, signed ? Mdf4DataType.SignedIntegerLe : Mdf4DataType.UnsignedIntegerLe, 4, 8);
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32, next: sizeChannel, data: sizeChannel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 5, 0, frame), raw.DataBlock(new byte[] { 1, 2, 3, 4, unchecked((byte)size) })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.FindChannel("frame")!.ReadValues())).Should().Throw<Mdf4FormatException>().WithMessage("*declares*bytes in a field of 4*");
+    }
+
+    [Theory]
+    [InlineData(0x40000123u)]
+    [InlineData(0x20000000u | 0x80000000u)]
+    public void A_Can_Identifier_With_Unknown_Bits_Is_A_Format_Error(uint rawId)
+    {
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 5, 8, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 40, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 6, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        var record = new byte[6];
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), rawId);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(record)));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*bits beyond the 29-bit identifier*");
+    }
+
+    [Fact]
+    public void A_Channel_Group_With_Two_Masters_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock t2 = raw.Channel("t2", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 1, 8, sync: Mdf4SyncType.Time);
+        PendingBlock t1 = raw.Channel("t1", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: t2, sync: Mdf4SyncType.Time);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 2, 0, t1), raw.DataBlock(new byte[] { 1, 2 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*2 master channels*");
+    }
+
+    [Fact]
+    public void A_Stream_Is_Closed_When_Opening_A_Broken_File_Fails()
+    {
+        var stream = new System.IO.MemoryStream(new byte[200]);
+        Action open = () => Mdf4File.Open(stream, leaveOpen: false);
+        open.Should().Throw<Mdf4FormatException>();
+        stream.CanRead.Should().BeFalse();
+
+        var kept = new System.IO.MemoryStream(new byte[200]);
+        ((Action)(() => Mdf4File.Open(kept, leaveOpen: true))).Should().Throw<Mdf4FormatException>();
+        kept.CanRead.Should().BeTrue();
+    }
+
+    [Fact]
     public void An_Invalidation_Bit_Without_Invalidation_Bytes_Is_A_Format_Error()
     {
         var raw = new RawMdf();

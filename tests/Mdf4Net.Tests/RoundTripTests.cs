@@ -597,6 +597,31 @@ public class RoundTripTests
         file.StartTime.Should().Be(time);
     }
 
+    [Fact]
+    public void A_Channel_Whose_Offset_Overflows_The_Record_Is_Rejected()
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        definition.Add(new Mdf4ChannelDefinition("v", Mdf4DataType.UnsignedIntegerLe, 8) { ByteOffset = int.MaxValue });
+        ((Action)(() => writer.AddChannelGroup(definition))).Should().Throw<ArgumentException>().WithMessage("*do not fit a record*");
+    }
+
+    [Theory]
+    [InlineData((Mdf4SyncType)0)]
+    [InlineData((Mdf4SyncType)255)]
+    public void A_Master_Needs_A_Known_Sync_Type_To_Be_Written(Mdf4SyncType sync)
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        ((Action)(() =>
+        {
+            definition.Add(new Mdf4ChannelDefinition("t", Mdf4DataType.FloatLe, 64) { ChannelType = Mdf4ChannelType.Master, SyncType = sync });
+            writer.AddChannelGroup(definition);
+        })).Should().Throw<ArgumentException>().WithMessage("*SyncType*");
+    }
+
     [Theory]
     [InlineData(14)]
     [InlineData(-14)]

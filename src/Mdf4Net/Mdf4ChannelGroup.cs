@@ -59,7 +59,13 @@ public sealed class Mdf4ChannelGroup
             Collect(channel);
         }
 
-        MasterChannel = _allChannels.FirstOrDefault(c => c.ChannelType is Mdf4ChannelType.Master or Mdf4ChannelType.VirtualMaster);
+        List<Mdf4Channel> masters = _allChannels.Where(c => c.ChannelType is Mdf4ChannelType.Master or Mdf4ChannelType.VirtualMaster).ToList();
+        if (masters.Count > 1)
+        {
+            throw Mdf4FormatException.At(block.Offset, $"Channel group has {masters.Count} master channels; which one applies would depend on their order");
+        }
+
+        MasterChannel = masters.FirstOrDefault();
     }
 
     /// <summary>The data group this channel group belongs to.</summary>

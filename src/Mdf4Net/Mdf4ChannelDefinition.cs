@@ -171,9 +171,9 @@ public sealed class Mdf4ChannelDefinition
                 throw new ArgumentException($"Channel '{Name}': writing {ChannelType} channels is not supported.");
         }
 
-        if (ChannelType == Mdf4ChannelType.Master && SyncType == Mdf4SyncType.None)
+        if (ChannelType == Mdf4ChannelType.Master && SyncType is < Mdf4SyncType.Time or > Mdf4SyncType.Index)
         {
-            throw new ArgumentException($"Master channel '{Name}' needs a SyncType.");
+            throw new ArgumentException($"Master channel '{Name}' needs a SyncType of Time, Angle, Distance or Index.");
         }
 
         if (IsVariableLength)

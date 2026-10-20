@@ -153,9 +153,21 @@ internal sealed class ChannelLayout
 
     public int ByteLength => BitField.ByteSpan(BitOffset, BitCount);
 
-    public int End => ByteOffset + ByteLength;
+    public int End => checked(ByteOffset + ByteLength);
 
     public static IReadOnlyList<ChannelLayout> Build(Mdf4ChannelGroupDefinition definition, out int recordSize)
+    {
+        try
+        {
+            return BuildChecked(definition, out recordSize);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentException("The channel offsets and sizes do not fit a record of at most 2 GiB.", nameof(definition));
+        }
+    }
+
+    private static IReadOnlyList<ChannelLayout> BuildChecked(Mdf4ChannelGroupDefinition definition, out int recordSize)
     {
         // Channels with an explicit offset keep it; the rest follow after the last explicit byte,
         // so automatic placement can never overlap an explicit one.
@@ -196,7 +208,7 @@ internal sealed class ChannelLayout
 
     private static int ExplicitEnd(Mdf4ChannelDefinition channel)
     {
-        int end = channel.ByteOffset is int offset ? offset + BitField.ByteSpan(channel.BitOffset, StoredBits(channel)) : 0;
+        int end = channel.ByteOffset is int offset ? checked(offset + BitField.ByteSpan(channel.BitOffset, StoredBits(channel))) : 0;
         foreach (Mdf4ChannelDefinition member in channel.Members)
         {
             end = Math.Max(end, ExplicitEnd(member));
@@ -216,7 +228,7 @@ internal sealed class ChannelLayout
             }
 
             var layout = new ChannelLayout(channel, cursor, 0, bits, Array.Empty<ChannelLayout>());
-            cursor += layout.ByteLength;
+            cursor = checked(cursor + layout.ByteLength);
             return layout;
         }
 
@@ -236,9 +248,9 @@ internal sealed class ChannelLayout
         if (channel.ByteOffset is int structureOffset)
         {
             int span = Math.Max(channel.BitCount / 8, end - structureOffset);
-            return new ChannelLayout(channel, structureOffset, 0, span * 8, members);
+            return new ChannelLayout(channel, structureOffset, 0, checked(span * 8), members);
         }
 
-        return new ChannelLayout(channel, start, 0, (end - start) * 8, members);
+        return new ChannelLayout(channel, start, 0, checked((end - start) * 8), members);
     }
 }

@@ -60,6 +60,19 @@ public sealed class Mdf4ConversionDefinition
             throw new ArgumentException("The table needs at least one entry.", nameof(table));
         }
 
+        for (int i = 1; i < entries.Length; i++)
+        {
+            if (entries[i].Key == entries[i - 1].Key)
+            {
+                throw new ArgumentException($"The table has the key {entries[i].Key} twice.", nameof(table));
+            }
+        }
+
+        if (entries.Any(e => double.IsNaN(e.Key)))
+        {
+            throw new ArgumentException("A table key cannot be NaN.", nameof(table));
+        }
+
         double[] values = entries.SelectMany(e => new[] { e.Key, e.Value }).ToArray();
         return new(interpolate ? Mdf4ConversionType.ValueToValueInterpolated : Mdf4ConversionType.ValueToValue, values, Array.Empty<string?>());
     }

@@ -388,6 +388,11 @@ public sealed class Mdf4Channel
         // Before anything else: invalidation flags must not let a broken layout pass as a channel
         // of null samples.
         ValidateLayout();
+        if (physical)
+        {
+            CheckConversionFits();
+        }
+
         var result = new List<object?>();
         long index = 0;
         foreach (ArraySegment<byte> record in ChannelGroup.DataGroup.EnumerateRecords(ChannelGroup))
@@ -407,6 +412,35 @@ public sealed class Mdf4Channel
         }
 
         return result.ToArray();
+    }
+
+    /// <summary>
+    /// Whether the conversion can be applied to this channel at all, decided once before any
+    /// sample so that it does not depend on which samples happen to be valid: numbers take the
+    /// numeric conversions, strings the text-input ones (or the identity).
+    /// </summary>
+    private void CheckConversionFits()
+    {
+        if (Conversion is null)
+        {
+            return;
+        }
+
+        if (!Conversion.IsSupported)
+        {
+            throw new NotSupportedException($"Channel '{Name}' uses a {Conversion.Type} conversion, which is not supported.");
+        }
+
+        if (IsNumeric && Conversion.TakesText)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' is numeric but its conversion takes texts");
+        }
+
+        bool isString = DataType is >= Mdf4DataType.StringLatin1 and <= Mdf4DataType.StringUtf16Be && !IsNumeric;
+        if (isString && Conversion.Type != Mdf4ConversionType.Identity && !Conversion.TakesText)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' holds {DataType} texts but has a {Conversion.Type} conversion, which takes numbers");
+        }
     }
 
     private void CheckInteger(ReadOnlySpan<byte> record)

@@ -296,7 +296,15 @@ internal static class CanDataFrameReader
 
             var data = new byte[dataLength];
             Buffer.BlockCopy(payload, 0, data, 0, dataLength);
-            byte busChannel = bus is null ? (byte)0 : (byte)bus.DecodeRawNumber(span, index);
+            byte busChannel = 0;
+            if (bus is not null)
+            {
+                double rawBus = bus.DecodeRawNumber(span, index);
+                busChannel = rawBus is >= 0 and <= 255
+                    ? (byte)rawBus
+                    : throw Mdf4FormatException.At(bus.Offset, $"CAN frame {index} has the bus channel {rawBus}, which is not 0 to 255");
+            }
+
             CanDirection direction = dir is not null && Flag(dir, span, index) ? CanDirection.Transmit : CanDirection.Receive;
 
             index++;

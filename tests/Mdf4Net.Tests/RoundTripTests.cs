@@ -607,6 +607,37 @@ public class RoundTripTests
         ((Action)(() => writer.AddChannelGroup(definition))).Should().Throw<ArgumentException>().WithMessage("*do not fit a record*");
     }
 
+    [Fact]
+    public void A_Master_That_The_Reader_Could_Not_Use_Is_Not_Written()
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        ((Action)(() => definition.Add(new Mdf4ChannelDefinition("t", Mdf4DataType.StringUtf8, 64) { ChannelType = Mdf4ChannelType.Master, SyncType = Mdf4SyncType.Time }))).Should().Throw<ArgumentException>();
+        var text = Mdf4ConversionDefinition.ValueToText(new[] { new KeyValuePair<double, string>(0, "zero") }, "other");
+        ((Action)(() => definition.Add(new Mdf4ChannelDefinition("t", Mdf4DataType.UnsignedIntegerLe, 8) { ChannelType = Mdf4ChannelType.Master, SyncType = Mdf4SyncType.Time, Conversion = text }))).Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void A_Table_Needs_Distinct_Keys()
+    {
+        var entries = new[] { new KeyValuePair<double, double>(1, 1), new KeyValuePair<double, double>(1, 2) };
+        ((Action)(() => Mdf4ConversionDefinition.ValueToValue(entries, interpolate: false))).Should().Throw<ArgumentException>().WithMessage("*twice*");
+    }
+
+    [Fact]
+    public void Members_Cannot_Be_Added_To_A_Channel_After_It_Was_Validated()
+    {
+        var members = new List<Mdf4ChannelDefinition> { Mdf4ChannelDefinition.UInt8("a") };
+        var structure = new Mdf4ChannelDefinition("s", Mdf4DataType.ByteArray, 8) { Members = members };
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        definition.Add(structure);
+
+        // The caller's list is no longer the channel's list.
+        members.Add(new Mdf4ChannelDefinition("bad", Mdf4DataType.FloatLe, 24));
+        structure.Members.Should().HaveCount(1);
+    }
+
     [Theory]
     [InlineData((Mdf4SyncType)0)]
     [InlineData((Mdf4SyncType)255)]

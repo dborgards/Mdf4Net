@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Mdf4Net;
 
@@ -92,7 +93,15 @@ public sealed class Mdf4ChannelDefinition
     /// The members of a structure: this channel becomes a byte array spanning them, and the
     /// members are written as its composition.
     /// </summary>
-    public IReadOnlyList<Mdf4ChannelDefinition> Members { get; init; } = Array.Empty<Mdf4ChannelDefinition>();
+    public IReadOnlyList<Mdf4ChannelDefinition> Members
+    {
+        get => _members;
+
+        // A copy: the caller's list could be changed after the channel was validated.
+        init => _members = (value ?? throw new ArgumentNullException(nameof(value))).ToArray();
+    }
+
+    private Mdf4ChannelDefinition[] _members = Array.Empty<Mdf4ChannelDefinition>();
 
     internal bool IsVariableLength => ChannelType == Mdf4ChannelType.VariableLength;
 
@@ -174,6 +183,12 @@ public sealed class Mdf4ChannelDefinition
         if (ChannelType == Mdf4ChannelType.Master && SyncType is < Mdf4SyncType.Time or > Mdf4SyncType.Index)
         {
             throw new ArgumentException($"Master channel '{Name}' needs a SyncType of Time, Angle, Distance or Index.");
+        }
+
+        if (ChannelType == Mdf4ChannelType.Master
+            && (!(IsInteger || IsFloat) || Members.Count > 0 || Conversion is { Type: Mdf4ConversionType.ValueToText or Mdf4ConversionType.ValueRangeToText or Mdf4ConversionType.TextToValue or Mdf4ConversionType.TextToText or Mdf4ConversionType.BitfieldText }))
+        {
+            throw new ArgumentException($"Master channel '{Name}' has to be a number without a conversion to or from texts.");
         }
 
         if (IsVariableLength)

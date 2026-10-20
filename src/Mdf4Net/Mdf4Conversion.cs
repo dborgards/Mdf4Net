@@ -214,6 +214,24 @@ public sealed class Mdf4Conversion
             values[i] = block.F64(24 + (i * 8));
         }
 
+        // Value-to-value tables are searched as sorted: keys that are not strictly increasing
+        // would silently map values to the wrong entry.
+        if (type is Mdf4ConversionType.ValueToValue or Mdf4ConversionType.ValueToValueInterpolated)
+        {
+            for (int i = 2; i < valCount; i += 2)
+            {
+                if (!(values[i] > values[i - 2]))
+                {
+                    throw Mdf4FormatException.At(link, $"The keys of a {type} conversion are not strictly increasing");
+                }
+            }
+
+            if (double.IsNaN(values[0]))
+            {
+                throw Mdf4FormatException.At(link, $"The keys of a {type} conversion are not strictly increasing");
+            }
+        }
+
         var references = new object?[refCount];
         for (int i = 0; i < refCount; i++)
         {

@@ -43,7 +43,7 @@ internal static class Zlib
 
         int cmf = compressed[0];
         int flg = compressed[1];
-        if ((cmf & 0x0F) != 8 || ((cmf << 8) | flg) % 31 != 0 || (flg & 0x20) != 0)
+        if ((cmf & 0x0F) != 8 || (cmf >> 4) > 7 || ((cmf << 8) | flg) % 31 != 0 || (flg & 0x20) != 0)
         {
             throw Mdf4FormatException.At(blockOffset, "DZ block data is not a zlib stream");
         }

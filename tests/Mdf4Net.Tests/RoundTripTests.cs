@@ -533,26 +533,10 @@ public class RoundTripTests
     private static void AssertListOffsetsMatchBlockLengths(Mdf4File file, string because)
     {
         Mdf4Net.Internal.BlockReader reader = file.Reader;
-        foreach (long dataLink in file.DataGroups.Select(group => group.DataLink))
+        foreach (long first in file.DataGroups.Select(group => FirstList(reader, group.DataLink)).Where(list => list != 0))
         {
-            long link = dataLink;
-            if (link == 0)
-            {
-                continue;
-            }
-
-            if (reader.ReadHeader(link).Id == "##HL")
-            {
-                link = reader.ReadBlock(link, "##HL").Link(0);
-            }
-
-            if (reader.ReadHeader(link).Id != "##DL")
-            {
-                continue;
-            }
-
             long expected = 0;
-            for (long dl = link; dl != 0;)
+            for (long dl = first; dl != 0;)
             {
                 Mdf4Net.Internal.RawBlock list = reader.ReadBlock(dl, "##DL");
                 uint count = list.U32(4);
@@ -568,6 +552,17 @@ public class RoundTripTests
                 dl = list.Link(0);
             }
         }
+    }
+
+    /// <summary>The first DL block behind a data link (through an HL block), or 0 if there is none.</summary>
+    private static long FirstList(Mdf4Net.Internal.BlockReader reader, long link)
+    {
+        if (link != 0 && reader.ReadHeader(link).Id == "##HL")
+        {
+            link = reader.ReadBlock(link, "##HL").Link(0);
+        }
+
+        return link != 0 && reader.ReadHeader(link).Id == "##DL" ? link : 0;
     }
 
     private static readonly Mdf4WriterOptions Options = new() { Compression = Mdf4Compression.TransposedDeflate, DataBlockSize = 1024 };

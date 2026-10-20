@@ -36,8 +36,9 @@ public class AsammdfFixtureTests
         {
             // asammdf computes the stored nanoseconds through a double; near the year 2500 its
             // resolution is 2,048 ns, so the file holds the start time to within that, not exactly.
+            // FromTicks, not FromMilliseconds: .NET Framework rounds the latter to whole milliseconds.
             DateTimeOffset declared = DateTimeOffset.Parse(start.GetString()!, System.Globalization.CultureInfo.InvariantCulture);
-            file.StartTime.Should().BeCloseTo(declared, TimeSpan.FromMilliseconds(0.004), $"{fixture} start time");
+            file.StartTime.Should().BeCloseTo(declared, TimeSpan.FromTicks(40), $"{fixture} start time");
         }
 
         int checkedChannels = 0;

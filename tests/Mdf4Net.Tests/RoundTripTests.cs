@@ -28,7 +28,7 @@ public class RoundTripTests
             writer =>
             {
                 var definition = new Mdf4ChannelGroupDefinition("Types");
-                Mdf4ChannelDefinition t = definition.AddTime();
+                definition.AddTime();
                 Mdf4ChannelDefinition u8 = definition.Add(Mdf4ChannelDefinition.UInt8("u8"));
                 Mdf4ChannelDefinition u64 = definition.Add(Mdf4ChannelDefinition.UInt64("u64"));
                 Mdf4ChannelDefinition i16 = definition.Add(Mdf4ChannelDefinition.Int16("i16"));
@@ -100,7 +100,7 @@ public class RoundTripTests
                 definition.AddTime();
                 Mdf4ChannelDefinition text = definition.Add(Mdf4ChannelDefinition.VariableLengthString("text"));
                 Mdf4ChannelDefinition blob = definition.Add(Mdf4ChannelDefinition.VariableLengthBytes("blob"));
-                Mdf4ChannelDefinition unset = definition.Add(Mdf4ChannelDefinition.VariableLengthString("unset", Mdf4DataType.StringUtf16Le));
+                definition.Add(Mdf4ChannelDefinition.VariableLengthString("unset", Mdf4DataType.StringUtf16Le));
                 Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
                 for (int i = 0; i < 400; i++)
                 {
@@ -147,7 +147,7 @@ public class RoundTripTests
         file.ChannelGroups.Select(g => g.Name).Should().Equal("Fast", "Slow");
         file.FindChannel("fast")!.ReadDoubles().Should().Equal(Enumerable.Range(0, 1000).Select(i => (double)i));
         file.FindChannel("slow")!.ReadDoubles().Should().Equal(Enumerable.Range(0, 10).Select(i => (double)i));
-        file.FindChannel("slow")!.ChannelGroup.ReadTimestamps().Should().Equal(Enumerable.Range(0, 10).Select(i => i * 100 * 0.001));
+        file.FindChannel("slow")!.ChannelGroup.ReadTimestamps().Should().Equal(Enumerable.Range(0, 10).Select(k => k * 100.0 * 0.001));
     }
 
     [Fact]
@@ -344,7 +344,7 @@ public class RoundTripTests
     public void Writing_Is_Rejected_After_Completion()
     {
         using var stream = new System.IO.MemoryStream();
-        Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
         var definition = new Mdf4ChannelGroupDefinition("G");
         definition.Add(Mdf4ChannelDefinition.UInt8("v"));
         Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
@@ -361,7 +361,7 @@ public class RoundTripTests
     public void A_File_That_Was_Never_Completed_Is_Unfinalized_And_Rejected()
     {
         using var stream = new System.IO.MemoryStream();
-        Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
         var definition = new Mdf4ChannelGroupDefinition("G");
         definition.Add(Mdf4ChannelDefinition.UInt8("v"));
         writer.AddChannelGroup(definition).BeginRecord().Commit();
@@ -372,7 +372,35 @@ public class RoundTripTests
         System.Text.Encoding.ASCII.GetString(snapshot, 0, 8).Should().Be("UnFinMF ");
         Action open = () => MdfTestFile.Open(snapshot).Dispose();
         open.Should().Throw<Mdf4FormatException>();
-        writer.Dispose();
+    }
+
+    [Theory]
+    [InlineData((byte)0x00, (short)120, 0, "2026-10-20T10:00:00+00:00")]
+    [InlineData((byte)0x02, (short)120, 0, "2026-10-20T12:00:00+02:00")]
+    [InlineData((byte)0x02, (short)60, 60, "2026-10-20T12:00:00+02:00")]
+    [InlineData((byte)0x03, (short)120, 0, "2026-10-20T10:00:00+02:00")]
+    [InlineData((byte)0x01, (short)0, 0, "2026-10-20T10:00:00+00:00")]
+    public void Header_Time_Flags_Decide_How_The_Time_Stamp_Is_Read(byte flags, short timeZoneMinutes, short dstMinutes, string expected)
+    {
+        // The HD block starts at 64; its data (after 24 header bytes and six links) at 136:
+        // time_ns (u64), tz_offset_min (i16), dst_offset_min (i16), time_flags (u8).
+        byte[] bytes = MdfTestFile.Write(writer =>
+        {
+            var definition = new Mdf4ChannelGroupDefinition("G");
+            definition.Add(Mdf4ChannelDefinition.UInt8("v"));
+            writer.AddChannelGroup(definition);
+        });
+        var stored = new DateTimeOffset(2026, 10, 20, 10, 0, 0, TimeSpan.Zero);
+        ulong ns = (ulong)(stored.UtcTicks - new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero).UtcTicks) * 100;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(136), ns);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(144), timeZoneMinutes);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(146), dstMinutes);
+        bytes[148] = flags;
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        DateTimeOffset expectedTime = DateTimeOffset.Parse(expected, System.Globalization.CultureInfo.InvariantCulture);
+        file.StartTime.Should().Be(expectedTime);
+        file.StartTime.Offset.Should().Be(expectedTime.Offset);
     }
 
     private static object?[] Values(Mdf4File file, string name) => file.FindChannel(name)!.ReadRawValues();

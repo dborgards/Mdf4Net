@@ -52,7 +52,11 @@ public sealed class Mdf4File : IDisposable
     /// <summary>The standard unfinalized flags (<c>id_unfin_flags</c>); zero for a finalized file.</summary>
     public ushort UnfinalizedFlags { get; private set; }
 
-    /// <summary>Start of the measurement, as an instant (UTC based).</summary>
+    /// <summary>
+    /// Start of the measurement. A UTC time stamp is returned in the time zone the file records
+    /// (if any). A file that stores the local wall clock (<c>hd_time_flags</c> bit 0) without a
+    /// time zone yields that wall-clock reading with a zero offset, since the zone is unknown.
+    /// </summary>
     public DateTimeOffset StartTime { get; private set; }
 
     /// <summary>The header comment (the text of an <c>HDcomment</c> or a plain TX block).</summary>
@@ -210,7 +214,7 @@ public sealed class Mdf4FileHistoryEntry
         UserName = Field(content, "user_name");
     }
 
-    /// <summary>When the change was made.</summary>
+    /// <summary>When the change was made; time zone handling as for <see cref="Mdf4File.StartTime"/>.</summary>
     public DateTimeOffset Time { get; }
 
     /// <summary>The description of the change.</summary>

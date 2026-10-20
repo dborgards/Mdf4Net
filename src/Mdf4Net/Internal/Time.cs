@@ -18,18 +18,23 @@ internal static class Time
         short dst = block.I16(offset + 10);
         byte flags = block.U8(offset + 12);
 
-        long maxNs = (DateTime.MaxValue.Ticks - UnixEpochTicks) * 100;
+        // Keep a day of margin at both ends so that applying an offset cannot leave DateTime's range.
+        long maxNs = (DateTime.MaxValue.Ticks - TimeSpan.TicksPerDay - UnixEpochTicks) * 100;
         long ticks = UnixEpochTicks + (long)(Math.Min(ns, (ulong)maxNs) / 100);
-        var utc = new DateTimeOffset(ticks, TimeSpan.Zero);
 
-        // Bit 1: the offsets are valid. Bit 0: the time stamp is local time, not UTC.
-        bool offsetsValid = (flags & 0x02) != 0;
-        if (offsetsValid && Math.Abs(tz + dst) < 14 * 60)
+        // Bit 0: the time stamp is the local wall clock, not UTC. Bit 1: the offsets are valid.
+        bool localTime = (flags & 0x01) != 0;
+        bool offsetsValid = (flags & 0x02) != 0 && Math.Abs(tz + dst) < 14 * 60;
+        TimeSpan zone = offsetsValid ? TimeSpan.FromMinutes(tz + dst) : TimeSpan.Zero;
+
+        if (localTime)
         {
-            return utc.ToOffset(TimeSpan.FromMinutes(tz + dst));
+            // A wall-clock reading: with valid offsets it names an instant in that zone; without,
+            // the zone is unknown and the reading is returned as it is, with a zero offset.
+            return new DateTimeOffset(ticks, zone);
         }
 
-        return utc;
+        return new DateTimeOffset(ticks, TimeSpan.Zero).ToOffset(zone);
     }
 
     public static ulong ToNanoseconds(DateTimeOffset time)

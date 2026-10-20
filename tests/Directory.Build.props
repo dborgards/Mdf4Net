@@ -1,0 +1,47 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!--
+      The library multi-targets `netstandard2.0;net10.0`. `net48` resolves the netstandard2.0
+      asset, so a second leg of the same tests executes the assembly a .NET Framework consumer
+      actually gets, including the System.Memory polyfill only that asset pulls in.
+
+      That leg needs a Windows host to *run*, so the condition is on the build host: on Linux and
+      macOS a plain `dotnet test` runs net10.0 alone, and the Windows CI leg covers net48.
+      Mdf4NetTestNetFrameworkLeg compile-checks the leg from anywhere:
+        dotnet build tests/Mdf4Net.Tests -f net48 -p:Mdf4NetTestNetFrameworkLeg=true
+    -->
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows')) OR '$(Mdf4NetTestNetFrameworkLeg)' == 'true'">net10.0;net48</TargetFrameworks>
+    <TestTfmsInParallel>false</TestTfmsInParallel>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CA1707;CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="AwesomeAssertions" />
+    <PackageReference Include="PublicApiGenerator">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Polyfill">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>compile; build; analyzers; contentfiles</IncludeAssets>
+    </PackageReference>
+    <!-- coverlet.collector ships no .NET Framework assets: coverage is a net10.0 concern. -->
+    <PackageReference Include="coverlet.collector" Condition="'$(TargetFramework)' != 'net48'">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

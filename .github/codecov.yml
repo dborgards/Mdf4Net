@@ -1,0 +1,28 @@
+# Codecov configuration. Uploaded from the `build-test` job in .github/workflows/ci.yml.
+#
+# Both status checks are informational: they report, they never fail a build. Turning them into a
+# gate later is a two-line edit here -- drop `informational` and set a target -- plus adding
+# `codecov/patch` to the required checks of the `main` ruleset.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# The pull request comment is the useful half; `require_changes` keeps it quiet on pull requests
+# that do not move coverage at all.
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true
+
+# Coverage is collected on net10.0 only, on the Linux leg (coverlet has no .NET Framework assets).
+flag_management:
+  default_rules:
+    statuses:
+      - type: project
+        informational: true

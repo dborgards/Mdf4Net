@@ -1,0 +1,78 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      # A shipped dependency moving is a change in the package, so .releaserc.json lets
+      # `build(deps)` publish a patch -- except for the `test-tooling` group below, which it
+      # recognises by that name in the subject. Rename the group and the rule in .releaserc.json
+      # has to follow; eng/verify-release-config.mjs checks the rule against a subject of this shape.
+      prefix: "build(deps)"
+    groups:
+      # Every package only tests/ references, plus the SBOM tool (it changes what the SBOMs say,
+      # not what the package contains). A test-only package left out of this list releases a patch
+      # nobody needs.
+      test-tooling:
+        patterns:
+          - "CycloneDX"
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "coverlet.*"
+          - "AwesomeAssertions"
+          - "Polyfill"
+          - "PublicApiGenerator"
+          - "System.Text.Json"
+      # The same packages for security updates, which a group covers only when it says so.
+      test-tooling-security:
+        applies-to: security-updates
+        patterns:
+          - "CycloneDX"
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "coverlet.*"
+          - "AwesomeAssertions"
+          - "Polyfill"
+          - "PublicApiGenerator"
+          - "System.Text.Json"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      # Not "build(deps)": npm here is only the release tooling; a bump must not publish a release.
+      prefix: "chore(deps)"
+    groups:
+      semantic-release:
+        patterns:
+          - "semantic-release"
+          - "@semantic-release/*"
+          - "conventional-changelog-*"
+    ignore:
+      # 10.x needs conventional-changelog-writer@9+, while semantic-release 25 still resolves
+      # writer ^8 through its analyser plugins. The mismatch only shows when a real changelog is
+      # rendered on main. Revisit together with a semantic-release that resolves writer@9.
+      - dependency-name: "conventional-changelog-conventionalcommits"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: pip
+    # eng/interop/requirements.txt: asammdf, the reference implementation of the interop check.
+    # Not "build(deps)": it changes what the package is tested against, not what it contains.
+    directory: "/eng/interop"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "test(deps)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci(deps)"

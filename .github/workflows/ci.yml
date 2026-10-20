@@ -1,0 +1,280 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.pick.outputs.semver }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GitVersion derives the version from tags and branch history; a shallow clone has
+          # neither.
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Deliberately allowed to fail. GitVersion cannot version every git shape — a branch with no
+      # merge base against a release branch, for one — and "we could not name this build" is not a
+      # reason to refuse to compile it.
+      - name: Run GitVersion
+        id: gitversion
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          dotnet tool restore
+          semver=$(dotnet gitversion /showvariable FullSemVer)
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+
+      - name: Pick the version for this run
+        id: pick
+        run: |
+          semver='${{ steps.gitversion.outputs.semver }}'
+          if [ -z "$semver" ]; then
+            semver="0.0.0-unversioned.${{ github.run_number }}"
+            echo "::warning title=GitVersion::Could not derive a version for this ref; building as $semver. Release versions come from semantic-release and are unaffected."
+          fi
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+          echo "Building as $semver"
+
+  build-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Mdf4Net.sln
+
+      - name: Build
+        run: dotnet build Mdf4Net.sln --configuration Release --no-restore -p:Version=${{ needs.version.outputs.semver }}
+
+      # Split per target framework: coverlet ships no .NET Framework assets, so coverage is
+      # collected on net10.0 only, and each leg writes its own results file.
+      - name: Test (net10.0)
+        run: >
+          dotnet test Mdf4Net.sln
+          --configuration Release
+          --no-build
+          --framework net10.0
+          -p:Version=${{ needs.version.outputs.semver }}
+          --logger "trx;LogFileName=test-results-net10.0.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory artifacts/test-results
+
+      # Windows only: net48 is where the netstandard2.0 assets actually execute. No --collect,
+      # for the reason above.
+      - name: Test (net48)
+        if: runner.os == 'Windows'
+        run: >
+          dotnet test Mdf4Net.sln
+          --configuration Release
+          --no-build
+          --framework net48
+          -p:Version=${{ needs.version.outputs.semver }}
+          --logger "trx;LogFileName=test-results-net48.trx"
+          --results-directory artifacts/test-results
+
+      # A failing approval test writes what it saw; printing it lets the baseline be reviewed and
+      # committed straight from the log.
+      - name: Show generated API approvals
+        if: failure() && runner.os == 'Linux'
+        run: |
+          shopt -s nullglob
+          for f in tests/Mdf4Net.Tests/ApiApprovals/*.received.txt; do
+            echo "----- BEGIN $f"
+            cat "$f"
+            echo "----- END $f"
+          done
+
+      # Puts the coverage number on the run's summary page. Linux only -- all three legs measure
+      # the same net10.0 code.
+      - name: Coverage summary
+        if: always() && runner.os == 'Linux'
+        run: python3 eng/coverage-summary.py artifacts/test-results >> "$GITHUB_STEP_SUMMARY"
+
+      # `fail_ci_if_error: false`: Codecov being unreachable, or a fork PR without the token, must
+      # not turn a green build red. .github/codecov.yml keeps its checks informational to match.
+      - name: Upload coverage to Codecov
+        if: always() && runner.os == 'Linux'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: artifacts/test-results
+          flags: net10.0
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            artifacts/test-results/**
+            tests/Mdf4Net.Tests/ApiApprovals/*.received.txt
+          if-no-files-found: warn
+
+  pack:
+    name: pack (dry run)
+    runs-on: ubuntu-latest
+    needs: [version, build-test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Proves the packing the release workflow's `verify` job does still works, on every PR.
+      - name: Pack
+        run: dotnet pack Mdf4Net.sln --configuration Release -p:Version=${{ needs.version.outputs.semver }} --output artifacts/nuget
+
+      - name: List produced packages
+        run: ls -l artifacts/nuget
+
+      # Every package carries a README, a license expression and a .snupkg, and there are as many
+      # packages as expected. The release runs the same script again as `prepareCmd`.
+      - name: Verify package contents
+        run: python3 eng/verify-packages.py artifacts/nuget
+
+      # The release's SBOM step, run on every pull request: a dependency whose licence cannot be
+      # mapped to SPDX, or a tool bump that changes the output, fails here and not on the release.
+      # The version is GitVersion's minus the `+build` metadata NuGet leaves out of file names.
+      - name: Generate SBOMs
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.semver }}'
+          python3 eng/generate-sboms.py artifacts/nuget "${version%%+*}" artifacts/sbom
+
+      - name: Verify SBOMs
+        run: |
+          version='${{ needs.version.outputs.semver }}'
+          python3 eng/verify-sboms.py artifacts/sbom artifacts/nuget "${version%%+*}"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nuget-packages
+          path: |
+            artifacts/nuget/*.nupkg
+            artifacts/nuget/*.snupkg
+          if-no-files-found: error
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: artifacts/sbom/*.cdx.json
+          if-no-files-found: error
+
+  release-config:
+    name: validate release config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install release tooling
+        run: npm ci --ignore-scripts
+
+      # Catches a broken .releaserc.json on the pull request that introduces it. The full dry run
+      # lives in release.yml, where the token has the rights the GitHub plugin needs.
+      - name: Verify release configuration loads
+        run: node eng/verify-release-config.mjs
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Code style is enforced here and only here (EnforceCodeStyleInBuild would be a second
+      # mechanism for the same rule). Its own job: a misplaced blank line has no business failing
+      # the build legs, but it gates all the same as a required check of the `main` ruleset.
+      - name: Verify formatting
+        run: dotnet format Mdf4Net.sln --verify-no-changes --verbosity diagnostic
+
+  interop:
+    name: interop (asammdf)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: eng/interop/requirements.txt
+
+      - name: Install asammdf
+        run: pip install -r eng/interop/requirements.txt
+
+      # Mdf4Net writes every scenario and asammdf reads it back; asammdf writes its own files and
+      # Mdf4Net reads them. Agreement in both directions with an independent implementation is the
+      # conformance evidence this project has (see README, "Validation").
+      - name: Check interoperability in both directions
+        run: python3 eng/interop/check_asammdf.py --configuration Release --keep artifacts/interop
+
+      - name: Upload interop files
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: interop-files
+          path: artifacts/interop/**
+          if-no-files-found: ignore

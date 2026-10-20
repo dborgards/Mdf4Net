@@ -1,0 +1,31 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="netstandard2.0 polyfills (shipped dependency of the netstandard2.0 asset only)">
+    <PackageVersion Include="System.Memory" Version="4.6.3" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <!--
+      AwesomeAssertions, not FluentAssertions: from 8.0.0 on FluentAssertions ships under the Xceed
+      commercial license, which does not fit this MIT-licensed project. AwesomeAssertions is the
+      Apache-2.0 community fork. Do not add FluentAssertions back.
+    -->
+    <PackageVersion Include="AwesomeAssertions" Version="9.6.0" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
+    <!-- Source-only BCL polyfills for the net48 test leg; never a dependency of anything shipped. -->
+    <PackageVersion Include="Polyfill" Version="11.4.5" />
+    <!-- Renders the approved public-API surface (PublicApiSurfaceTests). Test-only. -->
+    <PackageVersion Include="PublicApiGenerator" Version="11.5.4" />
+    <!-- Reads the expected-values JSON of the asammdf fixtures on the net48 leg (net10.0 has it in the BCL). -->
+    <PackageVersion Include="System.Text.Json" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

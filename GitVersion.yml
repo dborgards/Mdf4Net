@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/GitTools/GitVersion/main/schemas/6.0/GitVersion.configuration.json
+#
+# GitVersion answers "what version is *this* commit?" for builds that are not releases: CI
+# artifacts and pull-request builds get an ordered SemVer instead of 0.0.0. It never decides the
+# next release -- semantic-release does that from the conventional commits and writes the
+# `vX.Y.Z` tag, which GitVersion then reads back.
+#
+# It runs once per pipeline run (the `version` job in .github/workflows/ci.yml), not as an MSBuild
+# task, and that job is allowed to fail: see the Versioning block in Directory.Build.props.
+# Locally: `dotnet tool restore && dotnet gitversion`.
+workflow: GitHubFlow/v1
+
+mode: ContinuousDelivery
+tag-prefix: '[vV]?'
+
+# Where versioning starts while no `vX.Y.Z` tag exists. Inert once the first tag is there.
+next-version: 0.1.0
+
+branches:
+  main:
+    # A CI build of main is not a release; the label keeps `0.1.1-ci.12` from reading like one.
+    label: ci
+    increment: Patch
+  pull-request:
+    label: pr

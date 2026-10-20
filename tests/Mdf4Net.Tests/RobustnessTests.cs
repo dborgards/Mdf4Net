@@ -835,12 +835,12 @@ public class RobustnessTests
     [Fact]
     public void A_Stream_Is_Closed_When_Opening_A_Broken_File_Fails()
     {
-        var stream = new System.IO.MemoryStream(new byte[200]);
+        using var stream = new System.IO.MemoryStream(new byte[200]);
         Action open = () => Mdf4File.Open(stream, leaveOpen: false);
         open.Should().Throw<Mdf4FormatException>();
         stream.CanRead.Should().BeFalse();
 
-        var kept = new System.IO.MemoryStream(new byte[200]);
+        using var kept = new System.IO.MemoryStream(new byte[200]);
         ((Action)(() => Mdf4File.Open(kept, leaveOpen: true))).Should().Throw<Mdf4FormatException>();
         kept.CanRead.Should().BeTrue();
     }

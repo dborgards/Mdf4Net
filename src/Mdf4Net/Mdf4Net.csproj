@@ -9,10 +9,23 @@
     <PackageReference Include="System.Memory" />
   </ItemGroup>
 
+  <PropertyGroup Label="Strong name">
+    <!--
+      Strong-named from the first release on, so that strong-named .NET Framework applications can
+      reference the package; adding it later would change the assembly identity. The key is
+      committed and public: it provides identity only, not authenticity (that is what the signed
+      provenance attestation of each release is for). The SNK holds the private key, so assemblies
+      are fully signed on every platform; public signing would fail strong-name verification on
+      .NET Framework.
+    -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>Mdf4Net.snk</AssemblyOriginatorKeyFile>
+    <!-- Public key of Mdf4Net.snk, for the InternalsVisibleTo grant to the equally signed tests. -->
+    <Mdf4NetPublicKey>0024000004800000140100000602000000240000525341310008000001000100a9af6c57a6664a6f61a7c32f8f04c64028d37ae3d7ea561d99cfa1f554b09bb6cee4b5a8751c6a9868fda184eab70df7f8bebc47952ad4469f47a7a285d8276cc1e5cf5967ad95dfd95af32aa076a472e93776c433f413e43c00ddfe07c8822d9b19e27a9611b3ad3b5a74b576e965d2ebbb994641848b1955555e7c2e77820c4840395e7cd6c32f30648ac00609a4077c9af08a3678073f1ee87d63623bc35cc6d2b76333d8c59befd19a2945f56aa00741f0206cb6a5ef2321194da14fe90e8fbe46e9eba4e0db78d1a4702c1f14ef7fce363ffc1a918dc9a8265e8b95c6ddddd88e992bc9f07a6e4645b00220dc397f60f7bf803e33a3f339e8a2e3f7a2bb</Mdf4NetPublicKey>
+  </PropertyGroup>
+
   <ItemGroup>
-    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
-      <_Parameter1>Mdf4Net.Tests</_Parameter1>
-    </AssemblyAttribute>
+    <InternalsVisibleTo Include="Mdf4Net.Tests" Key="$(Mdf4NetPublicKey)" />
   </ItemGroup>
 
 </Project>

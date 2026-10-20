@@ -3,6 +3,9 @@
   <PropertyGroup>
     <AssemblyName>Mdf4Net.Tests</AssemblyName>
     <RootNamespace>Mdf4Net.Tests</RootNamespace>
+    <!-- Signed with the library's key so that its InternalsVisibleTo grant holds. -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>../../src/Mdf4Net/Mdf4Net.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>

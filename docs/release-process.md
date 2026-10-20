@@ -58,9 +58,10 @@ If `attest` fails, *Re-run failed jobs* repeats it alone against the retained ar
 
 ## First release
 
-semantic-release starts at **1.0.0** when no `vX.Y.Z` tag exists. To begin with a 0.x line
-instead, push a `v0.0.0` tag on the commit before the first release; the first `feat` then
-publishes 0.1.0. That is a one-time decision for the maintainer.
+semantic-release starts at 1.0.0 when no `vX.Y.Z` tag exists. This repository starts with a 0.x
+line instead: `v0.0.0` is tagged on the initial commit, so the first release with a `feat` commit
+publishes **0.1.0**. While the major version is 0, a breaking change still bumps the major (to
+1.0.0) under the configured rules; mark 1.0.0 deliberately rather than by accident.
 
 The package-validation baseline (`PackageValidationBaselineVersion` in `src/Directory.Build.props`)
 is empty until the first release and is moved by the release itself afterwards.

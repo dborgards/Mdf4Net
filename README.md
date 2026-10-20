@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Read and write **ASAM MDF 4.x** (`.mf4`) measurement data files in pure C# — no native libraries,
-no P/Invoke, one package for `netstandard2.0` and `net10.0`.
+no P/Invoke, one strong-named package for `netstandard2.0` and `net10.0`.
 
 MDF is the standard file format for measurement data in automotive and industrial engineering:
 signal recordings from ECUs, data loggers and test benches, and raw bus traffic (CAN, CAN FD, LIN,

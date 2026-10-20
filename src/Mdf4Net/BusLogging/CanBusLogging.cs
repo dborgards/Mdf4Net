@@ -277,8 +277,9 @@ internal static class CanDataFrameReader
         }
     }
 
+    // The field is an integer (checked above); a magnitude test avoids comparing doubles for equality.
     private static bool Flag(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
-        => channel.DecodeRawNumber(record, index) != 0;
+        => Math.Abs(channel.DecodeRawNumber(record, index)) > 0;
 
     private static double Physical(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
     {

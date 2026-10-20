@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Mdf4Net.Internal;
 
 namespace Mdf4Net;
@@ -36,6 +37,7 @@ public sealed class Mdf4ChannelGroupWriter
             }
         }
 
+        VariableLengthLayouts = _layouts.Values.Where(l => l.Definition.IsVariableLength).ToList();
         Records = new DataSink(writer, "##DT", options.Compression, options.DataBlockSize, recordSize);
         _builder = new Mdf4RecordBuilder(this);
     }
@@ -111,16 +113,7 @@ public sealed class Mdf4ChannelGroupWriter
             : throw new ArgumentException($"Channel '{channel.Name}' does not belong to this channel group.", nameof(channel));
     }
 
-    internal IEnumerable<ChannelLayout> VariableLengthLayouts()
-    {
-        foreach (ChannelLayout layout in _layouts.Values)
-        {
-            if (layout.Definition.IsVariableLength)
-            {
-                yield return layout;
-            }
-        }
-    }
+    internal IReadOnlyList<ChannelLayout> VariableLengthLayouts { get; }
 
     internal void Commit(byte[] record)
     {

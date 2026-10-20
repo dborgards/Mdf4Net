@@ -194,9 +194,11 @@ public class RobustnessTests
         }
         catch (Mdf4FormatException)
         {
+            // The contract: a malformed file is reported as a format error.
         }
         catch (NotSupportedException)
         {
+            // Also within the contract: a well-formed construct the library does not implement.
         }
         catch (Exception ex)
         {

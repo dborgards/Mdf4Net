@@ -272,7 +272,8 @@ internal static class BitField
             return 0x7E00;
         }
 
-        ushort sign = (ushort)(value < 0 || (value == 0 && 1 / value < 0) ? 0x8000 : 0);
+        // The sign bit of the double itself, so that -0.0 keeps its sign.
+        ushort sign = (ushort)(BitConverter.DoubleToInt64Bits(value) < 0 ? 0x8000 : 0);
         double magnitude = Math.Abs(value);
         if (magnitude >= 65520)
         {

@@ -31,6 +31,7 @@ internal sealed class DataSink
     private int _used;
     private long _flushed;
 
+    /// <summary>Creates an empty stream that writes its blocks through <paramref name="appender"/>.</summary>
     /// <param name="appender">Where blocks go.</param>
     /// <param name="blockId">"##DT" or "##SD".</param>
     /// <param name="compression">Compression of the blocks.</param>

@@ -98,7 +98,7 @@ public sealed class Mdf4RecordBuilder
         }
 
         RequireInteger(channel);
-        if (double.IsNaN(value) || double.IsInfinity(value) || Math.Floor(value) != value)
+        if (double.IsNaN(value) || double.IsInfinity(value) || !Math.Floor(value).Equals(value))
         {
             throw new ArgumentException($"Channel '{channel.Name}' holds integers; {value} is not a whole number.", nameof(value));
         }
@@ -188,7 +188,7 @@ public sealed class Mdf4RecordBuilder
     /// <summary>Appends the record to the channel group.</summary>
     public void Commit()
     {
-        foreach (ChannelLayout layout in _group.VariableLengthLayouts())
+        foreach (ChannelLayout layout in _group.VariableLengthLayouts)
         {
             byte[] value = _variable.TryGetValue(layout, out byte[]? bytes) ? bytes : Array.Empty<byte>();
             DataSink signal = layout.SignalData!;

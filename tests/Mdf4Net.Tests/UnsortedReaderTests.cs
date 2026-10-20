@@ -109,7 +109,7 @@ public class UnsortedReaderTests
         PendingBlock virtualTime = raw.Channel("vt", Mdf4ChannelType.VirtualMaster, Mdf4DataType.UnsignedIntegerLe, 0, 0, next: count, sync: Mdf4SyncType.Time, conversion: raw.Linear(0.5, 0));
 
         expected = new List<(double, byte, bool, byte[], string)>();
-        var stream = new MemoryStream();
+        using var stream = new MemoryStream();
         long vlsdOffset = 0;
         long vlsdTotal = 0;
         int samples = 0, counters = 0;

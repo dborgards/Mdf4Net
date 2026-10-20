@@ -72,7 +72,7 @@ internal static class Scenarios
         });
 
         var definition = new Mdf4ChannelGroupDefinition("Types");
-        Mdf4ChannelDefinition t = definition.AddTime();
+        definition.AddTime();
         Mdf4ChannelDefinition u8 = definition.Add(Mdf4ChannelDefinition.UInt8("u8"));
         Mdf4ChannelDefinition u16 = definition.Add(new Mdf4ChannelDefinition("u16_linear", Mdf4DataType.UnsignedIntegerLe, 16)
         {
@@ -116,20 +116,25 @@ internal static class Scenarios
             string text = "s" + (i % 97).ToString(System.Globalization.CultureInfo.InvariantCulture);
             byte[] bytes = { (byte)i, (byte)(i >> 8), 0xA5, (byte)(255 - (i % 256)) };
             long big = (long)i * 1_000_000_007L - 9_000_000_000L;
+            ulong u32Raw = (ulong)i * 65537UL;
+            ulong u64Raw = (ulong)i * 0x1_0000_0001UL;
+            long i16Raw = (i * 11L) - 16000;
+            long i32Raw = i * -70001L;
+            float f32Raw = i * 0.5f;
 
             group.BeginRecord(time)
                 .Set(u8, (ulong)(i % 256))
                 .Set(u16, (ulong)u16Raw)
-                .Set(u32, (ulong)i * 65537UL)
-                .Set(u64, (ulong)i * 0x1_0000_0001UL)
+                .Set(u32, u32Raw)
+                .Set(u64, u64Raw)
                 .Set(i8, (long)((i % 256) - 128))
-                .Set(i16, (long)(i * 11) - 16000)
-                .Set(i32, (long)i * -70001L)
+                .Set(i16, i16Raw)
+                .Set(i32, i32Raw)
                 .Set(i64, big)
-                .Set(f32, (float)(i * 0.5f))
+                .Set(f32, f32Raw)
                 .Set(f64, Math.Sin(i * 0.01) * 1000)
                 .Set(beU16, (ulong)u16Raw)
-                .Set(beI32, (long)i * -70001L)
+                .Set(beI32, i32Raw)
                 .Set(beF64, i * 1.5)
                 .Set(rational, (ulong)rationalRaw)
                 .Set(table, (ulong)tableRaw)
@@ -141,16 +146,16 @@ internal static class Scenarios
             recorder.Time(time);
             recorder.Add("u8", (double)(i % 256));
             recorder.Add("u16_linear", (u16Raw * 0.25) - 10, "km/h");
-            recorder.Add("u32", (double)((ulong)i * 65537UL));
-            recorder.Add("u64", (double)((ulong)i * 0x1_0000_0001UL));
+            recorder.Add("u32", (double)u32Raw);
+            recorder.Add("u64", (double)u64Raw);
             recorder.Add("i8", (double)((i % 256) - 128));
-            recorder.Add("i16", (double)((i * 11) - 16000));
-            recorder.Add("i32", (double)((long)i * -70001L));
+            recorder.Add("i16", (double)i16Raw);
+            recorder.Add("i32", (double)i32Raw);
             recorder.Add("i64", (double)big);
-            recorder.Add("f32", (double)(float)(i * 0.5f));
+            recorder.Add("f32", (double)f32Raw);
             recorder.Add("f64", Math.Sin(i * 0.01) * 1000, "bar");
             recorder.Add("u16_be", (double)u16Raw);
-            recorder.Add("i32_be", (double)((long)i * -70001L));
+            recorder.Add("i32_be", (double)i32Raw);
             recorder.Add("f64_be", i * 1.5);
             recorder.Add("u16_rational", ((2.0 * rationalRaw) + 1) / 4);
             recorder.Add("u8_table", tableRaw <= 100 ? tableRaw * 0.5 : Math.Min(400, 50 + ((tableRaw - 100) * 3.5)));

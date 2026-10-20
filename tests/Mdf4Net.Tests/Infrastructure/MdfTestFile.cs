@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Mdf4Net.BusLogging;
 
 namespace Mdf4Net.Tests.Infrastructure;
@@ -50,10 +51,7 @@ internal static class MdfTestFile
 
             if (group.IsCanDataFrameGroup())
             {
-                foreach (CanDataFrame unused in group.ReadCanDataFrames())
-                {
-                    samples++;
-                }
+                samples += group.ReadCanDataFrames().Count();
             }
         }
 

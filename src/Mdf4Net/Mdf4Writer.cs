@@ -152,7 +152,7 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
         foreach (Mdf4ChannelGroupWriter group in _groups)
         {
             group.Records.FlushBlock();
-            foreach (ChannelLayout layout in group.VariableLengthLayouts())
+            foreach (ChannelLayout layout in group.VariableLengthLayouts)
             {
                 layout.SignalData!.FlushBlock();
             }
@@ -182,7 +182,7 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
         for (int i = 0; i < _groups.Count; i++)
         {
             dataLinks[i] = _groups[i].Records.Finish();
-            foreach (ChannelLayout layout in _groups[i].VariableLengthLayouts())
+            foreach (ChannelLayout layout in _groups[i].VariableLengthLayouts)
             {
                 layout.SignalDataLink = layout.SignalData!.Finish();
             }

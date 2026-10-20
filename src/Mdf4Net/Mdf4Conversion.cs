@@ -223,7 +223,7 @@ public sealed class Mdf4Conversion
             if (raw <= Key(i))
             {
                 double k0 = Key(i - 1), k1 = Key(i);
-                if (raw == k1)
+                if (raw.Equals(k1))
                 {
                     return Val(i);
                 }
@@ -260,7 +260,7 @@ public sealed class Mdf4Conversion
         int n = _values.Length;
         for (int i = 0; i < n && i < _references.Length; i++)
         {
-            if (_values[i] == raw)
+            if (_values[i].Equals(raw))
             {
                 return Resolve(_references[i], raw);
             }

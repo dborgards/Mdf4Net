@@ -80,7 +80,13 @@ public sealed class Mdf4ConversionDefinition
     {
         KeyValuePair<double, string>[] entries = (table ?? throw new ArgumentNullException(nameof(table))).ToArray();
         double[] keys = entries.Select(e => e.Key).ToArray();
-        string?[] texts = entries.Select(e => (string?)e.Value).Append(defaultText).ToArray();
+        var texts = new string?[entries.Length + 1];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            texts[i] = entries[i].Value;
+        }
+
+        texts[entries.Length] = defaultText;
         return new(Mdf4ConversionType.ValueToText, keys, texts);
     }
 
@@ -106,7 +112,7 @@ public sealed class Mdf4ConversionDefinition
     /// <summary>Inverts identity and linear conversions; false for anything else.</summary>
     internal bool TryInvert(double physical, out double raw)
     {
-        if (Type == Mdf4ConversionType.Linear && Values[1] != 0)
+        if (Type == Mdf4ConversionType.Linear && !Values[1].Equals(0d))
         {
             raw = (physical - Values[0]) / Values[1];
             return true;

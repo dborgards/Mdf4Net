@@ -153,7 +153,8 @@ public sealed class Mdf4ChannelGroup
     public long CountRecords()
     {
         long count = 0;
-        foreach (ArraySegment<byte> unused in DataGroup.EnumerateRecords(this))
+        using IEnumerator<ArraySegment<byte>> records = DataGroup.EnumerateRecords(this).GetEnumerator();
+        while (records.MoveNext())
         {
             count++;
         }

@@ -256,7 +256,7 @@ internal static class CanDataFrameReader
     }
 
     private static bool Flag(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
-        => channel.IsNumeric && channel.DecodeRawNumber(record, index) != 0;
+        => channel.IsNumeric && Math.Abs(channel.DecodeRawNumber(record, index)) > 0;
 
     private static double Physical(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
     {

@@ -188,6 +188,9 @@ public sealed class Mdf4RecordBuilder
     /// <summary>Appends the record to the channel group.</summary>
     public void Commit()
     {
+        // Before any sink is touched: a builder obtained before Complete must not add signal data
+        // to a finalized file.
+        _group.ThrowIfWriterCompleted();
         foreach (ChannelLayout layout in _group.VariableLengthLayouts)
         {
             byte[] value = _variable.TryGetValue(layout, out byte[]? bytes) ? bytes : Array.Empty<byte>();

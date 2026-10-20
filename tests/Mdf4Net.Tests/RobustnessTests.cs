@@ -329,6 +329,84 @@ public class RobustnessTests
         return data;
     }
 
+    [Theory]
+    [InlineData(Mdf4ConversionType.Linear, 0, 0)]
+    [InlineData(Mdf4ConversionType.Linear, 1, 0)]
+    [InlineData(Mdf4ConversionType.Rational, 2, 0)]
+    [InlineData(Mdf4ConversionType.ValueToValueInterpolated, 3, 0)]
+    [InlineData(Mdf4ConversionType.ValueToValue, 0, 0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 3, 0)]
+    [InlineData(Mdf4ConversionType.ValueToText, 2, 2)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, 3, 2)]
+    [InlineData(Mdf4ConversionType.TextToValue, 1, 1)]
+    [InlineData(Mdf4ConversionType.TextToText, 0, 2)]
+    public void A_Conversion_Without_The_Parameters_Of_Its_Type_Is_A_Format_Error(Mdf4ConversionType type, int values, int references)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + (values * 8)];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)references);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)values);
+        var links = new object?[4 + references];
+        for (int i = 0; i < references; i++)
+        {
+            links[4 + i] = raw.Text("t" + i);
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: conversion);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 7 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage($"*{type} conversion cannot have*");
+    }
+
+    [Theory]
+    [InlineData(Mdf4DataType.FloatLe, 32)]
+    [InlineData(Mdf4DataType.StringUtf8, 32)]
+    [InlineData(Mdf4DataType.ByteArray, 32)]
+    [InlineData(Mdf4DataType.ComplexLe, 64)]
+    public void A_Bit_Offset_On_A_Non_Integer_Channel_Is_A_Format_Error(Mdf4DataType dataType, uint bitCount)
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, dataType, 0, bitCount, bitOffset: 3);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0, 0xC0, 0x3F, 0, 0, 0, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*bit offset*");
+    }
+
+    [Fact]
+    public void A_Master_Channel_With_A_Text_Conversion_Is_A_Format_Error_On_Both_Read_Paths()
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 8];
+        data[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+        PendingBlock text = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("zero"), raw.Text("other") }, data);
+
+        // A plain group and a CAN_DataFrame group, each with a UInt8 time master that converts to text.
+        PendingBlock plainMaster = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, sync: Mdf4SyncType.Time, conversion: text);
+        PendingBlock plain = raw.ChannelGroup(0, 1, 1, 0, plainMaster);
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 5, 64, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 29, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock canMaster = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time, conversion: text);
+        PendingBlock can = raw.ChannelGroup(0, 1, 13, 0, canMaster, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        PendingBlock canGroup = raw.DataGroup(0, can, raw.DataBlock(new byte[13]));
+        byte[] bytes = raw.Build(raw.DataGroup(0, plain, raw.DataBlock(new byte[] { 1 }), next: canGroup));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.ChannelGroups.First().ReadTimestamps())).Should().Throw<Mdf4FormatException>().WithMessage("*does not yield numbers*");
+        Mdf4ChannelGroup canGroupRead = file.ChannelGroups.Last();
+        canGroupRead.IsCanDataFrameGroup().Should().BeTrue();
+        ((Action)(() => canGroupRead.ReadCanDataFrames().ToList())).Should().Throw<Mdf4FormatException>().WithMessage("*does not yield numbers*");
+    }
+
     [Fact]
     public void A_Conversion_That_Refers_To_Itself_Is_Detected()
     {

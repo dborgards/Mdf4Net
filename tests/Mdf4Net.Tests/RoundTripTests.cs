@@ -567,6 +567,47 @@ public class RoundTripTests
 
     private static readonly Mdf4WriterOptions Options = new() { Compression = Mdf4Compression.TransposedDeflate, DataBlockSize = 1024 };
 
+    [Fact]
+    public void A_Record_Builder_Held_Across_Completion_Does_Not_Write_To_The_Finalized_File()
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, new Mdf4WriterOptions { DataBlockSize = 1024 }, leaveOpen: true);
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        Mdf4ChannelDefinition blob = definition.Add(Mdf4ChannelDefinition.VariableLengthBytes("blob"));
+        Mdf4RecordBuilder record = writer.AddChannelGroup(definition).BeginRecord();
+        writer.Complete();
+        long length = stream.Length;
+
+        // A value larger than a block would be written out at once by the signal data sink.
+        record.Set(blob, new byte[2048]);
+        ((Action)record.Commit).Should().Throw<InvalidOperationException>();
+        stream.Length.Should().Be(length);
+    }
+
+    [Theory]
+    [InlineData("2500-01-02T03:04:05+00:00")]
+    [InlineData("1970-01-01T00:00:00+00:00")]
+    [InlineData("2554-07-21T23:34:33.7095516+00:00")]
+    public void Start_Times_Across_The_Whole_Mdf_Range_Round_Trip(string start)
+    {
+        DateTimeOffset time = DateTimeOffset.Parse(start, System.Globalization.CultureInfo.InvariantCulture);
+        byte[] bytes = MdfTestFile.Write(_ => { }, new Mdf4WriterOptions { StartTime = time });
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.StartTime.Should().Be(time);
+    }
+
+    [Theory]
+    [InlineData("1969-12-31T23:59:59+00:00")]
+    [InlineData("2554-07-21T23:34:33.7095517+00:00")]
+    [InlineData("2600-01-01T00:00:00+00:00")]
+    public void Start_Times_Outside_The_Mdf_Range_Are_Rejected(string start)
+    {
+        DateTimeOffset time = DateTimeOffset.Parse(start, System.Globalization.CultureInfo.InvariantCulture);
+        using var stream = new System.IO.MemoryStream();
+        ((Action)(() => Mdf4Writer.Create(stream, new Mdf4WriterOptions { StartTime = time }))).Should().Throw<ArgumentOutOfRangeException>();
+    }
+
     [Theory]
     [InlineData((byte)0x00, (short)120, 0, "2026-10-20T10:00:00+00:00")]
     [InlineData((byte)0x02, (short)120, 0, "2026-10-20T12:00:00+02:00")]

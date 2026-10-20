@@ -203,6 +203,23 @@ public sealed class Mdf4Channel
     /// </summary>
     public object?[] ReadRawValues() => Read(physical: false);
 
+    /// <summary>
+    /// A master channel has to yield numbers: a non-numeric channel or a conversion to or from
+    /// texts makes the file unusable, which is a format error, not a caller's mistake.
+    /// </summary>
+    internal void EnsureUsableAsMaster()
+    {
+        if (!IsNumeric)
+        {
+            throw Mdf4FormatException.At(Offset, $"Master channel '{Name}' holds {DataType} values");
+        }
+
+        if (Conversion is { ProducesText: true } or { TakesText: true })
+        {
+            throw Mdf4FormatException.At(Offset, $"Master channel '{Name}' has a {Conversion.Type} conversion, which does not yield numbers");
+        }
+    }
+
     internal bool IsInteger => DataType <= Mdf4DataType.SignedIntegerBe
         || ChannelType is Mdf4ChannelType.VirtualMaster or Mdf4ChannelType.VirtualData;
 
@@ -382,6 +399,11 @@ public sealed class Mdf4Channel
 
     private void CheckFits(ReadOnlySpan<byte> record, int bytes)
     {
+        if (BitOffset != 0 && !IsInteger)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' declares a bit offset of {BitOffset}, which only integer channels may have");
+        }
+
         if (BitOffset > 7 || bytes < 0 || ByteOffset > int.MaxValue || (long)ByteOffset + bytes > record.Length)
         {
             throw Mdf4FormatException.At(Offset, $"Channel '{Name}' lies outside its record ({ByteOffset}+{bytes} > {record.Length})");

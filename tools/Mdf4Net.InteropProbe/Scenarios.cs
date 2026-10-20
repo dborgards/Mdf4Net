@@ -250,8 +250,11 @@ internal static class Scenarios
 
     private static Expectation MultiGroup(string path)
     {
-        var expectation = new Expectation();
-        using Mdf4Writer writer = Mdf4Writer.Create(path, new Mdf4WriterOptions { DataBlockSize = 4096 });
+        // Year 2500: a start time past the range a signed 64-bit nanosecond count would allow,
+        // which MDF stores as unsigned.
+        var start = new DateTimeOffset(2500, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var expectation = new Expectation { Start = start };
+        using Mdf4Writer writer = Mdf4Writer.Create(path, new Mdf4WriterOptions { DataBlockSize = 4096, StartTime = start });
 
         var fastDefinition = new Mdf4ChannelGroupDefinition("Fast") { Source = new Mdf4SourceDefinition("ECU1", Mdf4SourceType.Ecu) };
         fastDefinition.AddTime();

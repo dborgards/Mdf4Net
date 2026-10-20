@@ -18,9 +18,9 @@ internal static class Time
         short dst = block.I16(offset + 10);
         byte flags = block.U8(offset + 12);
 
-        // Keep a day of margin at both ends so that applying an offset cannot leave DateTime's range.
-        long maxNs = (DateTime.MaxValue.Ticks - TimeSpan.TicksPerDay - UnixEpochTicks) * 100;
-        long ticks = UnixEpochTicks + (long)(Math.Min(ns, (ulong)maxNs) / 100);
+        // Every UInt64 nanosecond count (up to the year 2554) lies far inside DateTime's range, with
+        // room for any time zone offset, so no clamping is needed.
+        long ticks = UnixEpochTicks + (long)(ns / 100);
 
         // Bit 0: the time stamp is the local wall clock, not UTC. Bit 1: the offsets are valid.
         bool localTime = (flags & 0x01) != 0;
@@ -37,9 +37,19 @@ internal static class Time
         return new DateTimeOffset(ticks, TimeSpan.Zero).ToOffset(zone);
     }
 
+    /// <summary>The first instant MDF can store: 1970-01-01T00:00:00Z.</summary>
+    public static readonly DateTimeOffset Earliest = new(UnixEpochTicks, TimeSpan.Zero);
+
+    /// <summary>The last instant MDF can store: UInt64.MaxValue nanoseconds after 1970, in 2554.</summary>
+    public static readonly DateTimeOffset Latest = new(UnixEpochTicks + (long)(ulong.MaxValue / 100), TimeSpan.Zero);
+
     public static ulong ToNanoseconds(DateTimeOffset time)
     {
-        long ticks = time.UtcTicks - UnixEpochTicks;
-        return ticks <= 0 ? 0 : (ulong)ticks * 100;
+        if (time < Earliest || time > Latest)
+        {
+            throw new ArgumentOutOfRangeException(nameof(time), time, $"MDF stores time stamps from {Earliest:O} to {Latest:O}.");
+        }
+
+        return (ulong)(time.UtcTicks - UnixEpochTicks) * 100;
     }
 }

@@ -32,6 +32,14 @@ public class AsammdfFixtureTests
         List<Mdf4ChannelGroup> groups = file.ChannelGroups.Where(g => !g.IsVariableLengthSignalData).ToList();
 
         using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(MdfTestFile.FixturePath("asammdf", fixture + ".json")));
+        if (expected.RootElement.TryGetProperty("start", out JsonElement start))
+        {
+            // asammdf computes the stored nanoseconds through a double; near the year 2500 its
+            // resolution is 2,048 ns, so the file holds the start time to within that, not exactly.
+            DateTimeOffset declared = DateTimeOffset.Parse(start.GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+            file.StartTime.Should().BeCloseTo(declared, TimeSpan.FromMilliseconds(0.004), $"{fixture} start time");
+        }
+
         int checkedChannels = 0;
         foreach (JsonElement channel in expected.RootElement.GetProperty("channels").EnumerateArray())
         {

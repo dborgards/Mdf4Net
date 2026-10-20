@@ -24,10 +24,18 @@ internal sealed class Expectation
 
     public List<CanDataFrame> Frames { get; } = new();
 
+    /// <summary>The measurement start time the file declares, if the scenario checks it.</summary>
+    public DateTimeOffset? Start { get; set; }
+
     public static Expectation Load(string path)
     {
         JsonNode root = JsonNode.Parse(File.ReadAllText(path))!;
         var expectation = new Expectation();
+        if (root["start"] is JsonNode start)
+        {
+            expectation.Start = DateTimeOffset.Parse(start.GetValue<string>(), CultureInfo.InvariantCulture);
+        }
+
         foreach (JsonNode? node in root["channels"]?.AsArray() ?? new JsonArray())
         {
             expectation.Channels.Add(new ExpectedChannel(
@@ -88,6 +96,11 @@ internal sealed class Expectation
         }
 
         var root = new JsonObject { ["channels"] = channels, ["can"] = frames };
+        if (Start is DateTimeOffset start)
+        {
+            root["start"] = start.ToString("O", CultureInfo.InvariantCulture);
+        }
+
         File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
     }
 
@@ -97,6 +110,13 @@ internal sealed class Expectation
         try
         {
             using Mdf4File file = Mdf4File.Open(path);
+            // asammdf computes the stored nanoseconds through a double (2,048 ns resolution near the
+            // year 2500), so its files hold a start time to within a few microseconds.
+            if (Start is DateTimeOffset start && Math.Abs((file.StartTime - start).Ticks) > 40)
+            {
+                problems.Add($"start time {file.StartTime:O}, expected {start:O}");
+            }
+
             List<Mdf4ChannelGroup> groups = file.ChannelGroups.Where(g => !g.IsVariableLengthSignalData).ToList();
             foreach (ExpectedChannel expected in Channels)
             {

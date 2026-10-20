@@ -140,11 +140,7 @@ public sealed class Mdf4ChannelGroup
 
         if (MasterChannel is not null)
         {
-            if (!MasterChannel.IsNumeric)
-            {
-                throw Mdf4FormatException.At(MasterChannel.Offset, $"Master channel '{MasterChannel.Name}' holds {MasterChannel.DataType} values");
-            }
-
+            MasterChannel.EnsureUsableAsMaster();
             return MasterChannel.ReadDoubles();
         }
 

@@ -14,6 +14,7 @@ public sealed class Mdf4WriterOptions
     /// <summary>
     /// The start of the measurement. Time stamps of a time master channel are seconds relative to
     /// it. Default: the time the writer is created. A non-zero offset is recorded as the time zone.
+    /// MDF stores instants from 1970-01-01 to 2554 (nanoseconds as UInt64); others are rejected.
     /// </summary>
     public DateTimeOffset? StartTime { get; init; }
 
@@ -62,6 +63,11 @@ public sealed class Mdf4WriterOptions
             {
                 throw new ArgumentException("ProgramId must be printable ASCII.", nameof(ProgramId));
             }
+        }
+
+        if (StartTime is DateTimeOffset start && (start < Internal.Time.Earliest || start > Internal.Time.Latest))
+        {
+            throw new ArgumentOutOfRangeException(nameof(StartTime), start, $"MDF stores start times from {Internal.Time.Earliest:O} to {Internal.Time.Latest:O}.");
         }
 
         if (DataBlockSize is < 1024 or > 256 * 1024 * 1024)

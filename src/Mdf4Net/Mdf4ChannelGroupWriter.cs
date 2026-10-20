@@ -115,6 +115,8 @@ public sealed class Mdf4ChannelGroupWriter
 
     internal IReadOnlyList<ChannelLayout> VariableLengthLayouts { get; }
 
+    internal void ThrowIfWriterCompleted() => _writer.ThrowIfCompleted();
+
     internal void Commit(byte[] record)
     {
         _writer.ThrowIfCompleted();

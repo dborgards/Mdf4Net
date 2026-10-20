@@ -225,6 +225,8 @@ public sealed class Mdf4Conversion
                 : TextBlocks.ReadText(reader, reference);
         }
 
+        CheckShape(link, type, valCount, refCount);
+
         // Value/range-to-text tables pass the numeric raw value on to a nested conversion, which
         // therefore has to take a number.
         if (type is Mdf4ConversionType.ValueToText or Mdf4ConversionType.ValueRangeToText)
@@ -245,6 +247,34 @@ public sealed class Mdf4Conversion
             TextBlocks.ReadText(reader, block.Link(2)),
             values,
             references);
+    }
+
+    /// <summary>
+    /// The numbers of values and references each conversion type is defined with: two linear and
+    /// six rational parameters, key/value pairs, range triples plus a default, one text per key
+    /// plus a default. A block that does not have them would otherwise be applied with missing
+    /// parameters read as zero.
+    /// </summary>
+    private static void CheckShape(long link, Mdf4ConversionType type, int values, int references)
+    {
+        bool valid = type switch
+        {
+            Mdf4ConversionType.Identity => true,
+            Mdf4ConversionType.Linear => values == 2,
+            Mdf4ConversionType.Rational => values == 6,
+            Mdf4ConversionType.ValueToValueInterpolated or Mdf4ConversionType.ValueToValue => values >= 2 && values % 2 == 0,
+            Mdf4ConversionType.ValueRangeToValue => values % 3 == 1,
+            Mdf4ConversionType.ValueToText => references == values + 1,
+            Mdf4ConversionType.ValueRangeToText => values % 2 == 0 && references == (values / 2) + 1,
+            Mdf4ConversionType.TextToValue => values == references + 1,
+            Mdf4ConversionType.TextToText => references % 2 == 1,
+            _ => true, // algebraic, bitfield text and unknown types are refused when applied
+        };
+
+        if (!valid)
+        {
+            throw Mdf4FormatException.At(link, $"A {type} conversion cannot have {values} values and {references} references");
+        }
     }
 
     private double Param(int index) => index < _values.Length ? _values[index] : 0;

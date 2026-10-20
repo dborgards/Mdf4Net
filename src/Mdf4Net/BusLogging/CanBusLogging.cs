@@ -209,6 +209,8 @@ internal static class CanDataFrameReader
             throw new NotSupportedException($"Channel group '{group.Name}' uses the master channel of another group (remote master), which is not supported.");
         }
 
+        master?.EnsureUsableAsMaster();
+
 
         long index = 0;
         foreach (ArraySegment<byte> segment in group.DataGroup.EnumerateRecords(group))

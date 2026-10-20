@@ -23,6 +23,7 @@ import math
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -81,6 +82,11 @@ def check_with_asammdf(mf4: Path, expected: dict) -> list:
     problems = []
     mdf = MDF(str(mf4))
     try:
+        if expected.get('start'):
+            wanted = datetime.fromisoformat(expected['start'])
+            # asammdf converts the nanoseconds through a double: a few microseconds near 2500.
+            if abs(mdf.header.start_time.timestamp() - wanted.timestamp()) > 4e-6:
+                problems.append(f'start time {mdf.header.start_time.isoformat()}, expected {wanted.isoformat()}')
         for channel in expected['channels']:
             label = f"{channel['group']}/{channel['name']}"
             try:
@@ -281,15 +287,18 @@ def write_asammdf_files(directory: Path, count: int = 2500) -> None:
         expectation(0, 's_variable', t, [v.decode() for v in variable]),
     ]}))
 
-    # Several groups at different rates.
+    # Several groups at different rates, starting in the year 2500 (beyond a signed 64-bit
+    # nanosecond count, inside MDF's unsigned one).
+    start = datetime(2500, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     mdf = MDF(version='4.10')
+    mdf.header.start_time = start
     t_fast = np.arange(1000) * 0.001
     t_slow = np.arange(20) * 0.05
     mdf.append([Signal(samples=np.arange(1000, dtype=np.float64) * 0.1, timestamps=t_fast, name='m_fast')])
     mdf.append([Signal(samples=np.arange(20, dtype=np.int32) * -3, timestamps=t_slow, name='m_slow')])
     mdf.save(directory / 'asammdf_multigroup.mf4', overwrite=True)
     mdf.close()
-    (directory / 'asammdf_multigroup.json').write_text(json.dumps({'channels': [
+    (directory / 'asammdf_multigroup.json').write_text(json.dumps({'start': start.isoformat(), 'channels': [
         expectation(0, 'm_fast', t_fast, np.arange(1000) * 0.1),
         expectation(1, 'm_slow', t_slow, np.arange(20) * -3.0),
     ]}))

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Mdf4Net</RootNamespace>
+    <Description>Read and write ASAM MDF 4.x (MF4) measurement data files in pure .NET: sorted and unsorted data groups, DT/DL/DZ/HL data blocks with deflate and transposition, variable-length signal data, channel conversions, and ASAM bus logging for CAN and CAN FD. No native dependencies.</Description>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Memory" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Mdf4Net.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

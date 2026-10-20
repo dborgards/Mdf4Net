@@ -1,0 +1,433 @@
+namespace Mdf4Net.BusLogging
+{
+    public static class CanBusLogging
+    {
+        public static Mdf4Net.BusLogging.CanDataFrameWriter AddCanDataFrameGroup(this Mdf4Net.Mdf4Writer writer, Mdf4Net.BusLogging.CanBusLoggingOptions? options = null) { }
+        public static bool IsCanDataFrameGroup(this Mdf4Net.Mdf4ChannelGroup group) { }
+        public static System.Collections.Generic.IEnumerable<Mdf4Net.BusLogging.CanDataFrame> ReadCanDataFrames(this Mdf4Net.Mdf4ChannelGroup group) { }
+        public static System.Collections.Generic.IReadOnlyList<Mdf4Net.BusLogging.CanDataFrame> ReadCanDataFrames(this Mdf4Net.Mdf4File file) { }
+    }
+    public sealed class CanBusLoggingOptions
+    {
+        public CanBusLoggingOptions() { }
+        public string GroupName { get; init; }
+        public int MaxDataLength { get; init; }
+        public string NetworkName { get; init; }
+    }
+    public readonly struct CanDataFrame : System.IEquatable<Mdf4Net.BusLogging.CanDataFrame>
+    {
+        public CanDataFrame(double timestamp, uint id, System.ReadOnlyMemory<byte> data, Mdf4Net.BusLogging.CanFrameFlags flags = 0, byte busChannel = 1, Mdf4Net.BusLogging.CanDirection direction = 0) { }
+        public byte BusChannel { get; }
+        public System.ReadOnlyMemory<byte> Data { get; }
+        public Mdf4Net.BusLogging.CanDirection Direction { get; }
+        public byte Dlc { get; }
+        public Mdf4Net.BusLogging.CanFrameFlags Flags { get; }
+        public uint Id { get; }
+        public bool IsExtended { get; }
+        public bool IsFd { get; }
+        public double Timestamp { get; }
+        public bool Equals(Mdf4Net.BusLogging.CanDataFrame other) { }
+        public override bool Equals(object? obj) { }
+        public override int GetHashCode() { }
+        public override string ToString() { }
+        public static int DlcToLength(int dlc, bool fd) { }
+        public static int LengthToDlc(int length, bool fd) { }
+        public static bool operator !=(Mdf4Net.BusLogging.CanDataFrame left, Mdf4Net.BusLogging.CanDataFrame right) { }
+        public static bool operator ==(Mdf4Net.BusLogging.CanDataFrame left, Mdf4Net.BusLogging.CanDataFrame right) { }
+    }
+    public sealed class CanDataFrameWriter
+    {
+        public Mdf4Net.Mdf4ChannelGroupWriter ChannelGroup { get; }
+        public long FrameCount { get; }
+        public void Write(in Mdf4Net.BusLogging.CanDataFrame frame) { }
+        public void Write(double timestamp, uint id, System.ReadOnlySpan<byte> data, Mdf4Net.BusLogging.CanFrameFlags flags = 0, byte busChannel = 1, Mdf4Net.BusLogging.CanDirection direction = 0) { }
+    }
+    public enum CanDirection : byte
+    {
+        Receive = 0,
+        Transmit = 1,
+    }
+    [System.Flags]
+    public enum CanFrameFlags : byte
+    {
+        None = 0,
+        Extended = 1,
+        FlexibleDataRate = 2,
+        BitRateSwitch = 4,
+        ErrorStateIndicator = 8,
+    }
+}
+namespace Mdf4Net
+{
+    public enum Mdf4BusType : byte
+    {
+        None = 0,
+        Other = 1,
+        Can = 2,
+        Lin = 3,
+        Most = 4,
+        FlexRay = 5,
+        KLine = 6,
+        Ethernet = 7,
+        Usb = 8,
+    }
+    public sealed class Mdf4Channel
+    {
+        public uint BitCount { get; }
+        public byte BitOffset { get; }
+        public uint ByteOffset { get; }
+        public Mdf4Net.Mdf4ChannelGroup ChannelGroup { get; }
+        public Mdf4Net.Mdf4ChannelType ChannelType { get; }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4Channel> Children { get; }
+        public string? Comment { get; }
+        public Mdf4Net.Mdf4Conversion? Conversion { get; }
+        public Mdf4Net.Mdf4DataType DataType { get; }
+        public Mdf4Net.Mdf4ChannelFlags Flags { get; }
+        public uint InvalidationBitPosition { get; }
+        public bool IsArray { get; }
+        public bool IsNumeric { get; }
+        public double? MaximumValue { get; }
+        public double? MinimumValue { get; }
+        public string Name { get; }
+        public long Offset { get; }
+        public Mdf4Net.Mdf4Channel? Parent { get; }
+        public byte? Precision { get; }
+        public Mdf4Net.Mdf4SourceInformation? Source { get; }
+        public Mdf4Net.Mdf4SyncType SyncType { get; }
+        public string? Unit { get; }
+        public double[] ReadDoubles() { }
+        public object?[] ReadRawValues() { }
+        public object?[] ReadValues() { }
+    }
+    public sealed class Mdf4ChannelDefinition
+    {
+        public Mdf4ChannelDefinition(string name, Mdf4Net.Mdf4DataType dataType, int bitCount) { }
+        public int BitCount { get; }
+        public int BitOffset { get; init; }
+        public int? ByteOffset { get; init; }
+        public Mdf4Net.Mdf4ChannelType ChannelType { get; init; }
+        public string? Comment { get; init; }
+        public Mdf4Net.Mdf4ConversionDefinition? Conversion { get; init; }
+        public Mdf4Net.Mdf4DataType DataType { get; }
+        public Mdf4Net.Mdf4ChannelFlags Flags { get; init; }
+        public double? MaximumValue { get; init; }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4ChannelDefinition> Members { get; init; }
+        public double? MinimumValue { get; init; }
+        public string Name { get; }
+        public byte? Precision { get; init; }
+        public Mdf4Net.Mdf4SourceDefinition? Source { get; init; }
+        public Mdf4Net.Mdf4SyncType SyncType { get; init; }
+        public string? Unit { get; init; }
+        public static Mdf4Net.Mdf4ChannelDefinition Bit(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Bytes(string name, int length) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Float32(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Float64(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Int16(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Int32(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Int64(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Int8(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition String(string name, int byteLength, Mdf4Net.Mdf4DataType encoding = 7) { }
+        public static Mdf4Net.Mdf4ChannelDefinition Time(string name = "t") { }
+        public static Mdf4Net.Mdf4ChannelDefinition UInt16(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition UInt32(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition UInt64(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition UInt8(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition VariableLengthBytes(string name) { }
+        public static Mdf4Net.Mdf4ChannelDefinition VariableLengthString(string name, Mdf4Net.Mdf4DataType encoding = 7) { }
+    }
+    [System.Flags]
+    public enum Mdf4ChannelFlags : uint
+    {
+        None = 0u,
+        AllValuesInvalid = 1u,
+        InvalidationBitValid = 2u,
+        PrecisionValid = 4u,
+        ValueRangeValid = 8u,
+        LimitRangeValid = 16u,
+        ExtendedLimitRangeValid = 32u,
+        DiscreteValue = 64u,
+        Calibration = 128u,
+        Calculated = 256u,
+        Virtual = 512u,
+        BusEvent = 1024u,
+        StrictlyMonotonous = 2048u,
+        DefaultX = 4096u,
+    }
+    public sealed class Mdf4ChannelGroup
+    {
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4Channel> AllChannels { get; }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4Channel> Channels { get; }
+        public string? Comment { get; }
+        public ulong CycleCount { get; }
+        public uint DataBytes { get; }
+        public Mdf4Net.Mdf4DataGroup DataGroup { get; }
+        public Mdf4Net.Mdf4ChannelGroupFlags Flags { get; }
+        public int Index { get; }
+        public uint InvalidationBytes { get; }
+        public bool IsBusEvent { get; }
+        public bool IsVariableLengthSignalData { get; }
+        public Mdf4Net.Mdf4Channel? MasterChannel { get; }
+        public string? Name { get; }
+        public long Offset { get; }
+        public char? PathSeparator { get; }
+        public ulong RecordId { get; }
+        public Mdf4Net.Mdf4SourceInformation? Source { get; }
+        public long CountRecords() { }
+        public Mdf4Net.Mdf4Channel? FindChannel(string name) { }
+        public System.Collections.Generic.IEnumerable<byte[]> ReadRecordBytes() { }
+        public double[] ReadTimestamps() { }
+    }
+    public sealed class Mdf4ChannelGroupDefinition
+    {
+        public Mdf4ChannelGroupDefinition(string? name) { }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4ChannelDefinition> Channels { get; }
+        public string? Comment { get; init; }
+        public Mdf4Net.Mdf4ChannelGroupFlags Flags { get; init; }
+        public bool IsFrozen { get; }
+        public string? Name { get; }
+        public char? PathSeparator { get; init; }
+        public Mdf4Net.Mdf4SourceDefinition? Source { get; init; }
+        public Mdf4Net.Mdf4ChannelDefinition Add(Mdf4Net.Mdf4ChannelDefinition channel) { }
+        public Mdf4Net.Mdf4ChannelDefinition AddTime(string name = "t") { }
+    }
+    [System.Flags]
+    public enum Mdf4ChannelGroupFlags : ushort
+    {
+        None = 0,
+        VariableLengthSignalData = 1,
+        BusEvent = 2,
+        PlainBusEvent = 4,
+        RemoteMaster = 8,
+        EventSignal = 16,
+    }
+    public sealed class Mdf4ChannelGroupWriter
+    {
+        public Mdf4Net.Mdf4ChannelGroupDefinition Definition { get; }
+        public Mdf4Net.Mdf4ChannelDefinition? Master { get; }
+        public long RecordCount { get; }
+        public int RecordSize { get; }
+        public Mdf4Net.Mdf4RecordBuilder BeginRecord() { }
+        public Mdf4Net.Mdf4RecordBuilder BeginRecord(double masterValue) { }
+        public void WriteRecord(System.ReadOnlySpan<byte> record) { }
+    }
+    public enum Mdf4ChannelType : byte
+    {
+        FixedLength = 0,
+        VariableLength = 1,
+        Master = 2,
+        VirtualMaster = 3,
+        Synchronization = 4,
+        MaximumLength = 5,
+        VirtualData = 6,
+    }
+    public enum Mdf4Compression
+    {
+        None = 0,
+        Deflate = 1,
+        TransposedDeflate = 2,
+    }
+    public sealed class Mdf4Conversion
+    {
+        public string? Comment { get; }
+        public bool IsSupported { get; }
+        public string? Name { get; }
+        public bool ProducesText { get; }
+        public System.Collections.Generic.IReadOnlyList<object?> References { get; }
+        public bool TakesText { get; }
+        public Mdf4Net.Mdf4ConversionType Type { get; }
+        public string? Unit { get; }
+        public System.Collections.Generic.IReadOnlyList<double> Values { get; }
+        public object Convert(string raw) { }
+        public object Convert(double raw, bool rawIsInteger = false) { }
+        public double ConvertToDouble(double raw, bool rawIsInteger = false) { }
+    }
+    public sealed class Mdf4ConversionDefinition
+    {
+        public string? Comment { get; init; }
+        public string? Name { get; init; }
+        public Mdf4Net.Mdf4ConversionType Type { get; }
+        public string? Unit { get; init; }
+        public static Mdf4Net.Mdf4ConversionDefinition Linear(double factor, double offset = 0) { }
+        public static Mdf4Net.Mdf4ConversionDefinition RangeToText([System.Runtime.CompilerServices.TupleElementNames(new string[] {
+                "Min",
+                "Max",
+                "Text"})] System.Collections.Generic.IEnumerable<System.ValueTuple<double, double, string>> ranges, string? defaultText = null) { }
+        public static Mdf4Net.Mdf4ConversionDefinition RangeToValue([System.Runtime.CompilerServices.TupleElementNames(new string[] {
+                "Min",
+                "Max",
+                "Value"})] System.Collections.Generic.IEnumerable<System.ValueTuple<double, double, double>> ranges, double defaultValue) { }
+        public static Mdf4Net.Mdf4ConversionDefinition Rational(double p1, double p2, double p3, double p4, double p5, double p6) { }
+        public static Mdf4Net.Mdf4ConversionDefinition ValueToText(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<double, string>> table, string? defaultText = null) { }
+        public static Mdf4Net.Mdf4ConversionDefinition ValueToValue(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<double, double>> table, bool interpolate) { }
+    }
+    public enum Mdf4ConversionType : byte
+    {
+        Identity = 0,
+        Linear = 1,
+        Rational = 2,
+        Algebraic = 3,
+        ValueToValueInterpolated = 4,
+        ValueToValue = 5,
+        ValueRangeToValue = 6,
+        ValueToText = 7,
+        ValueRangeToText = 8,
+        TextToValue = 9,
+        TextToText = 10,
+        BitfieldText = 11,
+    }
+    public sealed class Mdf4DataGroup
+    {
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4ChannelGroup> ChannelGroups { get; }
+        public string? Comment { get; }
+        public Mdf4Net.Mdf4File File { get; }
+        public int Index { get; }
+        public bool IsUnsorted { get; }
+        public long Offset { get; }
+        public int RecordIdSize { get; }
+    }
+    public enum Mdf4DataType : byte
+    {
+        UnsignedIntegerLe = 0,
+        UnsignedIntegerBe = 1,
+        SignedIntegerLe = 2,
+        SignedIntegerBe = 3,
+        FloatLe = 4,
+        FloatBe = 5,
+        StringLatin1 = 6,
+        StringUtf8 = 7,
+        StringUtf16Le = 8,
+        StringUtf16Be = 9,
+        ByteArray = 10,
+        MimeSample = 11,
+        MimeStream = 12,
+        CanOpenDate = 13,
+        CanOpenTime = 14,
+        ComplexLe = 15,
+        ComplexBe = 16,
+    }
+    public sealed class Mdf4File : System.IDisposable
+    {
+        public System.Collections.Generic.IEnumerable<Mdf4Net.Mdf4ChannelGroup> ChannelGroups { get; }
+        public System.Collections.Generic.IEnumerable<Mdf4Net.Mdf4Channel> Channels { get; }
+        public string? Comment { get; }
+        public string? CommentXml { get; }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4DataGroup> DataGroups { get; }
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4FileHistoryEntry> FileHistory { get; }
+        public bool IsFinalized { get; }
+        public string ProgramId { get; }
+        public System.DateTimeOffset StartTime { get; }
+        public ushort UnfinalizedFlags { get; }
+        public int Version { get; }
+        public string VersionText { get; }
+        public void Dispose() { }
+        public Mdf4Net.Mdf4Channel? FindChannel(string name, string? channelGroupName = null) { }
+        public System.Collections.Generic.IEnumerable<Mdf4Net.Mdf4Channel> FindChannels(string name, string? channelGroupName = null) { }
+        public static Mdf4Net.Mdf4File Open(string path, Mdf4Net.Mdf4ReaderOptions? options = null) { }
+        public static Mdf4Net.Mdf4File Open(System.IO.Stream stream, bool leaveOpen = false, Mdf4Net.Mdf4ReaderOptions? options = null) { }
+    }
+    public sealed class Mdf4FileHistoryEntry
+    {
+        public string? Comment { get; }
+        public System.DateTimeOffset Time { get; }
+        public string? ToolId { get; }
+        public string? ToolVendor { get; }
+        public string? ToolVersion { get; }
+        public string? UserName { get; }
+    }
+    public sealed class Mdf4FormatException : System.Exception
+    {
+        public Mdf4FormatException() { }
+        public Mdf4FormatException(string message) { }
+        public Mdf4FormatException(string message, System.Exception innerException) { }
+        public long BlockOffset { get; }
+    }
+    public sealed class Mdf4ReaderOptions
+    {
+        public Mdf4ReaderOptions() { }
+        public int MaxDecompressedBlockSize { get; init; }
+        public int MaxMetadataBlockSize { get; init; }
+        public int MaxNestingDepth { get; init; }
+        public int MaxRecordSize { get; init; }
+        public long MaxSignalDataSize { get; init; }
+        public static Mdf4Net.Mdf4ReaderOptions Default { get; }
+    }
+    public sealed class Mdf4RecordBuilder
+    {
+        public void Commit() { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, System.ReadOnlySpan<byte> value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, bool value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, byte[] value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, double value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, long value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, string value) { }
+        public Mdf4Net.Mdf4RecordBuilder Set(Mdf4Net.Mdf4ChannelDefinition channel, ulong value) { }
+        public Mdf4Net.Mdf4RecordBuilder SetPhysical(Mdf4Net.Mdf4ChannelDefinition channel, double value) { }
+    }
+    public sealed class Mdf4SourceDefinition
+    {
+        public Mdf4SourceDefinition(string? name, Mdf4Net.Mdf4SourceType sourceType, Mdf4Net.Mdf4BusType busType = 0) { }
+        public Mdf4Net.Mdf4BusType BusType { get; }
+        public string? Comment { get; init; }
+        public bool IsSimulated { get; init; }
+        public string? Name { get; }
+        public string? Path { get; init; }
+        public Mdf4Net.Mdf4SourceType SourceType { get; }
+    }
+    public sealed class Mdf4SourceInformation
+    {
+        public Mdf4Net.Mdf4BusType BusType { get; }
+        public string? Comment { get; }
+        public bool IsSimulated { get; }
+        public string? Name { get; }
+        public string? Path { get; }
+        public Mdf4Net.Mdf4SourceType SourceType { get; }
+    }
+    public enum Mdf4SourceType : byte
+    {
+        Other = 0,
+        Ecu = 1,
+        Bus = 2,
+        IO = 3,
+        Tool = 4,
+        User = 5,
+    }
+    public enum Mdf4SyncType : byte
+    {
+        None = 0,
+        Time = 1,
+        Angle = 2,
+        Distance = 3,
+        Index = 4,
+    }
+    public enum Mdf4Version
+    {
+        V410 = 410,
+        V420 = 420,
+    }
+    public sealed class Mdf4Writer : System.IDisposable
+    {
+        public System.Collections.Generic.IReadOnlyList<Mdf4Net.Mdf4ChannelGroupWriter> ChannelGroups { get; }
+        public bool IsCompleted { get; }
+        public Mdf4Net.Mdf4ChannelGroupWriter AddChannelGroup(Mdf4Net.Mdf4ChannelGroupDefinition definition) { }
+        public void Complete() { }
+        public void Dispose() { }
+        public void Flush() { }
+        public static Mdf4Net.Mdf4Writer Create(string path, Mdf4Net.Mdf4WriterOptions? options = null) { }
+        public static Mdf4Net.Mdf4Writer Create(System.IO.Stream stream, Mdf4Net.Mdf4WriterOptions? options = null, bool leaveOpen = false) { }
+    }
+    public sealed class Mdf4WriterOptions
+    {
+        public Mdf4WriterOptions() { }
+        public string? Comment { get; init; }
+        public Mdf4Net.Mdf4Compression Compression { get; init; }
+        public int DataBlockSize { get; init; }
+        public string FileHistoryComment { get; init; }
+        public string ProgramId { get; init; }
+        public System.DateTimeOffset? StartTime { get; init; }
+        public string ToolId { get; init; }
+        public string ToolVendor { get; init; }
+        public string? ToolVersion { get; init; }
+        public string? UserName { get; init; }
+        public Mdf4Net.Mdf4Version Version { get; init; }
+    }
+}

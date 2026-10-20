@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Mdf4Net.Tests</AssemblyName>
+    <RootNamespace>Mdf4Net.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup Label="System under test">
+    <ProjectReference Include="../../src/Mdf4Net/Mdf4Net.csproj" />
+  </ItemGroup>
+
+</Project>

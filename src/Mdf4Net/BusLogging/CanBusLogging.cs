@@ -225,8 +225,10 @@ internal static class CanDataFrameReader
             throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' is a {bytes.ChannelType} {bytes.DataType} channel, not stored bytes");
         }
 
+        bytes.ThrowIfUnknownType();
         foreach (Mdf4Channel? field in new[] { id, ideChannel, dlcChannel, lengthChannel, busChannelField, dirChannel, edlChannel, brsChannel, esiChannel })
         {
+            field?.ThrowIfUnknownType();
             if (field is not null && (!field.IsInteger || field.ChannelType != Mdf4ChannelType.FixedLength))
             {
                 throw Mdf4FormatException.At(field.Offset, $"CAN frame field '{field.Name}' is a {field.ChannelType} {field.DataType} channel, not a stored integer");
@@ -262,15 +264,17 @@ internal static class CanDataFrameReader
 
             byte[] payload = bytes.DecodeRaw(span, index) as byte[]
                 ?? throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' did not yield bytes");
-            int dataLength = payload.Length;
-            if (length is not null)
+            // The declared length has to be held by the payload field and be a length a CAN (FD)
+            // frame can have; anything else is corruption, not something to clamp into shape.
+            double declared = length is not null ? length.DecodeRawNumber(span, index)
+                : dlc is not null ? CanDataFrame.DlcToLength((int)dlc.DecodeRawNumber(span, index) & 0x0F, fd)
+                : payload.Length;
+            if (declared < 0 || declared > payload.Length || CanDataFrame.LengthToDlc((int)declared, fd) < 0)
             {
-                dataLength = (int)Math.Min(payload.Length, Math.Max(0, length.DecodeRawNumber(span, index)));
+                throw Mdf4FormatException.At(group.Offset, $"CAN frame {index} declares {declared} data bytes, which its {payload.Length}-byte payload field cannot hold as a {(fd ? "CAN FD" : "CAN")} frame");
             }
-            else if (dlc is not null)
-            {
-                dataLength = Math.Min(payload.Length, CanDataFrame.DlcToLength((int)dlc.DecodeRawNumber(span, index) & 0x0F, fd));
-            }
+
+            int dataLength = (int)declared;
 
             CanFrameFlags flags = (extended ? CanFrameFlags.Extended : 0)
                 | (fd ? CanFrameFlags.FlexibleDataRate : 0)
@@ -283,14 +287,8 @@ internal static class CanDataFrameReader
                 flags |= CanFrameFlags.Extended;
             }
 
-            int validLength = CanDataFrame.LengthToDlc(dataLength, fd) >= 0 ? dataLength : Math.Min(dataLength, fd ? 64 : 8);
-            while (CanDataFrame.LengthToDlc(validLength, fd) < 0)
-            {
-                validLength--;
-            }
-
-            var data = new byte[validLength];
-            Buffer.BlockCopy(payload, 0, data, 0, validLength);
+            var data = new byte[dataLength];
+            Buffer.BlockCopy(payload, 0, data, 0, dataLength);
             byte busChannel = bus is null ? (byte)0 : (byte)bus.DecodeRawNumber(span, index);
             CanDirection direction = dir is not null && Flag(dir, span, index) ? CanDirection.Transmit : CanDirection.Receive;
 

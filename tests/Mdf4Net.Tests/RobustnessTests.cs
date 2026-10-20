@@ -561,6 +561,47 @@ public class RobustnessTests
         read.Should().Throw<Mdf4FormatException>().WithMessage($"*'CAN_DataFrame.{field}' is a VirtualData*");
     }
 
+    [Theory]
+    [InlineData(255, false)]
+    [InlineData(9, false)]
+    [InlineData(10, true)]
+    [InlineData(13, true)]
+    [InlineData(16, true)]
+    public void A_Can_Data_Length_The_Payload_Field_Cannot_Hold_Is_A_Format_Error(byte dataLength, bool fd)
+    {
+        byte[] bytes = CanFrameWithDataLength(dataLength, fd);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*declares {dataLength} data bytes*");
+    }
+
+    [Fact]
+    public void A_Can_Data_Length_The_Payload_Field_Holds_Is_Read()
+    {
+        using Mdf4File file = MdfTestFile.Open(CanFrameWithDataLength(12, fd: true));
+        file.ReadCanDataFrames().Single().Data.Length.Should().Be(12);
+    }
+
+    private static byte[] CanFrameWithDataLength(byte dataLength, bool fd)
+    {
+        // t u8 @0, ID u32 @1, DataLength u8 @5, EDL u8 @6, DataBytes 12 bytes @7.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 7, 96, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock edl = raw.Channel("CAN_DataFrame.EDL", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 6, 1, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock length = raw.Channel("CAN_DataFrame.DataLength", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 5, 8, next: edl, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: length, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 144, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 19, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        var record = new byte[19];
+        record[1] = 0x23;
+        record[2] = 0x01;
+        record[5] = dataLength;
+        record[6] = (byte)(fd ? 1 : 0);
+        return raw.Build(raw.DataGroup(0, cg, raw.DataBlock(record)));
+    }
+
     [Fact]
     public void Invalid_Can_Frame_Fields_Agree_With_The_Generic_Reader()
     {
@@ -590,18 +631,22 @@ public class RobustnessTests
     }
 
     [Theory]
-    [InlineData(255, Mdf4DataType.UnsignedIntegerLe)]
-    [InlineData(0, (Mdf4DataType)255)]
-    public void A_Channel_Of_An_Unknown_Type_Is_Listed_But_Not_Read(byte channelType, Mdf4DataType dataType)
+    [InlineData(255, Mdf4DataType.UnsignedIntegerLe, false)]
+    [InlineData(0, (Mdf4DataType)255, false)]
+    [InlineData(255, Mdf4DataType.UnsignedIntegerLe, true)]
+    [InlineData(0, (Mdf4DataType)255, true)]
+    public void A_Channel_Of_An_Unknown_Type_Is_Listed_But_Not_Read(byte channelType, Mdf4DataType dataType, bool allValuesInvalid)
     {
+        // "All values invalid" must not let an unknown type pass as a channel of null samples.
         var raw = new RawMdf();
-        PendingBlock channel = raw.Channel("v", (Mdf4ChannelType)channelType, dataType, 0, 8);
+        PendingBlock channel = raw.Channel("v", (Mdf4ChannelType)channelType, dataType, 0, 8, flags: allValuesInvalid ? Mdf4ChannelFlags.AllValuesInvalid : Mdf4ChannelFlags.None);
         byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 7 })));
 
         using Mdf4File file = MdfTestFile.Open(bytes);
         Mdf4Channel v = file.FindChannel("v")!;
         ((Action)(() => v.ReadValues())).Should().Throw<NotSupportedException>().WithMessage("*not supported*");
         ((Action)(() => v.ReadRawValues())).Should().Throw<NotSupportedException>();
+        ((Action)(() => v.ReadDoubles())).Should().Throw<NotSupportedException>();
     }
 
     [Theory]
@@ -611,6 +656,8 @@ public class RobustnessTests
     [InlineData(Mdf4DataType.CanOpenDate, 48)]
     [InlineData(Mdf4DataType.CanOpenTime, 56)]
     [InlineData(Mdf4DataType.ComplexLe, 48)]
+    [InlineData(Mdf4DataType.ByteArray, 0)]
+    [InlineData(Mdf4DataType.StringUtf16Le, 0)]
     public void A_Byte_Field_That_Is_Not_A_Whole_Field_Is_A_Format_Error(Mdf4DataType dataType, uint bitCount)
     {
         var raw = new RawMdf();

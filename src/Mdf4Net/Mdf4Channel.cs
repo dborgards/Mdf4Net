@@ -147,6 +147,7 @@ public sealed class Mdf4Channel
     /// <exception cref="NotSupportedException">The conversion type is not supported.</exception>
     public double[] ReadDoubles()
     {
+        ThrowIfUnknownType();
         if (!IsNumeric)
         {
             throw new InvalidOperationException($"Channel '{Name}' holds {DataType} values; read it with ReadValues().");
@@ -209,6 +210,7 @@ public sealed class Mdf4Channel
     /// </summary>
     internal void EnsureUsableAsMaster()
     {
+        ThrowIfUnknownType();
         if (!IsNumeric)
         {
             throw Mdf4FormatException.At(Offset, $"Master channel '{Name}' holds {DataType} values");
@@ -381,6 +383,8 @@ public sealed class Mdf4Channel
 
     private object?[] Read(bool physical)
     {
+        // Before anything else: an unknown type must not pass as "all values invalid" either.
+        ThrowIfUnknownType();
         var result = new List<object?>();
         long index = 0;
         foreach (ArraySegment<byte> record in ChannelGroup.DataGroup.EnumerateRecords(ChannelGroup))
@@ -435,7 +439,7 @@ public sealed class Mdf4Channel
     /// file) is refused before a value is produced, rather than read as the nearest known kind.
     /// Listing such a channel is fine; reading it is not.
     /// </summary>
-    private void ThrowIfUnknownType()
+    internal void ThrowIfUnknownType()
     {
         if (ChannelType > Mdf4ChannelType.VirtualData)
         {
@@ -457,8 +461,8 @@ public sealed class Mdf4Channel
             Mdf4DataType.CanOpenDate => BitCount == 56,
             Mdf4DataType.CanOpenTime => BitCount == 48,
             Mdf4DataType.ComplexLe or Mdf4DataType.ComplexBe => BitCount is 32 or 64 or 128,
-            Mdf4DataType.StringUtf16Le or Mdf4DataType.StringUtf16Be => BitCount % 16 == 0,
-            _ => BitCount % 8 == 0,
+            Mdf4DataType.StringUtf16Le or Mdf4DataType.StringUtf16Be => BitCount > 0 && BitCount % 16 == 0,
+            _ => BitCount > 0 && BitCount % 8 == 0,
         };
         if (!valid)
         {

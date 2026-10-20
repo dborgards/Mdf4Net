@@ -285,6 +285,7 @@ public sealed class Mdf4Channel
 
     internal double DecodeRawNumber(ReadOnlySpan<byte> record, long index)
     {
+        ThrowIfUnknownType();
         switch (ChannelType)
         {
             case Mdf4ChannelType.VirtualMaster:
@@ -314,6 +315,7 @@ public sealed class Mdf4Channel
 
     internal object? DecodeRaw(ReadOnlySpan<byte> record, long index)
     {
+        ThrowIfUnknownType();
         switch (ChannelType)
         {
             case Mdf4ChannelType.VirtualMaster:
@@ -428,8 +430,41 @@ public sealed class Mdf4Channel
         }
     }
 
+    /// <summary>
+    /// A channel or data type this reader does not know (from a later MDF version or a broken
+    /// file) is refused before a value is produced, rather than read as the nearest known kind.
+    /// Listing such a channel is fine; reading it is not.
+    /// </summary>
+    private void ThrowIfUnknownType()
+    {
+        if (ChannelType > Mdf4ChannelType.VirtualData)
+        {
+            throw new NotSupportedException($"Channel '{Name}' has channel type {(byte)ChannelType}, which is not supported.");
+        }
+
+        if (DataType > Mdf4DataType.ComplexBe)
+        {
+            throw new NotSupportedException($"Channel '{Name}' has data type {(byte)DataType}, which is not supported.");
+        }
+    }
+
     private ReadOnlySpan<byte> FieldBytes(ReadOnlySpan<byte> record)
     {
+        // Strings, byte arrays and the composite types are whole bytes; a bit count that is not
+        // would silently drop its last bits.
+        bool valid = DataType switch
+        {
+            Mdf4DataType.CanOpenDate => BitCount == 56,
+            Mdf4DataType.CanOpenTime => BitCount == 48,
+            Mdf4DataType.ComplexLe or Mdf4DataType.ComplexBe => BitCount is 32 or 64 or 128,
+            Mdf4DataType.StringUtf16Le or Mdf4DataType.StringUtf16Be => BitCount % 16 == 0,
+            _ => BitCount % 8 == 0,
+        };
+        if (!valid)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has {BitCount} bits, which is not a whole {DataType} field");
+        }
+
         int bytes = (int)Math.Min(BitCount / 8, int.MaxValue);
         CheckFits(record, bytes);
         return record.Slice((int)ByteOffset, bytes);
@@ -528,9 +563,9 @@ public sealed class Mdf4Channel
             case Mdf4DataType.StringUtf8:
                 return Encoding.UTF8.GetString(TrimAtZero(bytes, 1).ToArray());
             case Mdf4DataType.StringUtf16Le:
-                return Encoding.Unicode.GetString(TrimAtZero(bytes, 2).ToArray());
+                return Encoding.Unicode.GetString(TrimAtZero(EvenBytes(bytes), 2).ToArray());
             case Mdf4DataType.StringUtf16Be:
-                return Encoding.BigEndianUnicode.GetString(TrimAtZero(bytes, 2).ToArray());
+                return Encoding.BigEndianUnicode.GetString(TrimAtZero(EvenBytes(bytes), 2).ToArray());
             case Mdf4DataType.CanOpenDate:
                 return CanOpenDate(bytes);
             case Mdf4DataType.CanOpenTime:
@@ -539,6 +574,12 @@ public sealed class Mdf4Channel
                 return bytes.ToArray();
         }
     }
+
+    /// <summary>A UTF-16 value of an odd number of bytes (VLSD or maximum length) is broken.</summary>
+    private ReadOnlySpan<byte> EvenBytes(ReadOnlySpan<byte> bytes)
+        => bytes.Length % 2 == 0
+            ? bytes
+            : throw Mdf4FormatException.At(Offset, $"UTF-16 value of channel '{Name}' has an odd number of bytes ({bytes.Length})");
 
     private static ReadOnlySpan<byte> TrimAtZero(ReadOnlySpan<byte> bytes, int width)
     {

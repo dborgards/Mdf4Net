@@ -63,7 +63,11 @@ public static class CanBusLogging
             && group.FindChannel(FrameChannel + ".DataBytes") is not null;
     }
 
-    /// <summary>Reads the CAN data frames of one bus logging channel group, in record order.</summary>
+    /// <summary>
+    /// Reads the CAN data frames of one bus logging channel group, in record order. A record whose
+    /// identifier, payload or time stamp is marked invalid is not a frame and is skipped; an
+    /// optional field marked invalid reads as if the group did not have it.
+    /// </summary>
     /// <exception cref="ArgumentException">The group is not a CAN data frame group.</exception>
     public static IEnumerable<CanDataFrame> ReadCanDataFrames(this Mdf4ChannelGroup group)
     {
@@ -77,7 +81,8 @@ public static class CanBusLogging
 
     /// <summary>
     /// Reads the CAN data frames of every CAN bus logging group of the file, merged in time
-    /// stamp order (stable for equal time stamps).
+    /// stamp order (stable for equal time stamps). Records with invalid frame fields are treated
+    /// as by <see cref="ReadCanDataFrames(Mdf4ChannelGroup)"/>.
     /// </summary>
     public static IReadOnlyList<CanDataFrame> ReadCanDataFrames(this Mdf4File file)
     {
@@ -194,14 +199,14 @@ internal static class CanDataFrameReader
 
         Mdf4Channel id = Find("ID")!;
         Mdf4Channel bytes = Find("DataBytes")!;
-        Mdf4Channel? ide = Find("IDE");
-        Mdf4Channel? dlc = Find("DLC");
-        Mdf4Channel? length = Find("DataLength");
-        Mdf4Channel? bus = Find("BusChannel");
-        Mdf4Channel? dir = Find("Dir");
-        Mdf4Channel? edl = Find("EDL");
-        Mdf4Channel? brs = Find("BRS");
-        Mdf4Channel? esi = Find("ESI");
+        Mdf4Channel? ideChannel = Find("IDE");
+        Mdf4Channel? dlcChannel = Find("DLC");
+        Mdf4Channel? lengthChannel = Find("DataLength");
+        Mdf4Channel? busChannelField = Find("BusChannel");
+        Mdf4Channel? dirChannel = Find("Dir");
+        Mdf4Channel? edlChannel = Find("EDL");
+        Mdf4Channel? brsChannel = Find("BRS");
+        Mdf4Channel? esiChannel = Find("ESI");
         Mdf4Channel? master = group.MasterChannel;
         if (master is null && (group.Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
         {
@@ -211,20 +216,27 @@ internal static class CanDataFrameReader
 
         master?.EnsureUsableAsMaster();
 
-        // The ASAM bus logging layout: the payload is a byte array, the frame fields are integers.
-        // A group that only has the names right is a format error, not a source of empty frames.
-        if (bytes.DataType != Mdf4DataType.ByteArray)
+        // The ASAM bus logging layout: the payload is a stored byte array, the frame fields are
+        // stored integers. A group that only has the names right is a format error, not a source
+        // of empty frames or of record indices posing as identifiers.
+        if (bytes.DataType != Mdf4DataType.ByteArray
+            || bytes.ChannelType is not (Mdf4ChannelType.FixedLength or Mdf4ChannelType.MaximumLength or Mdf4ChannelType.VariableLength))
         {
-            throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' holds {bytes.DataType} values, not bytes");
+            throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' is a {bytes.ChannelType} {bytes.DataType} channel, not stored bytes");
         }
 
-        foreach (Mdf4Channel? field in new[] { id, ide, dlc, length, bus, dir, edl, brs, esi })
+        foreach (Mdf4Channel? field in new[] { id, ideChannel, dlcChannel, lengthChannel, busChannelField, dirChannel, edlChannel, brsChannel, esiChannel })
         {
-            if (field is { IsInteger: false })
+            if (field is not null && (!field.IsInteger || field.ChannelType != Mdf4ChannelType.FixedLength))
             {
-                throw Mdf4FormatException.At(field.Offset, $"CAN frame field '{field.Name}' holds {field.DataType} values, not integers");
+                throw Mdf4FormatException.At(field.Offset, $"CAN frame field '{field.Name}' is a {field.ChannelType} {field.DataType} channel, not a stored integer");
             }
         }
+
+        // A field marked invalid in a record carries no value: a frame without a valid identifier,
+        // payload, time stamp or frame is not a frame and is skipped; an optional field that is
+        // invalid reads as if the group did not have it.
+        Mdf4Channel? frame = id.Parent;
 
         long index = 0;
         foreach (ArraySegment<byte> segment in group.DataGroup.EnumerateRecords(group))
@@ -232,6 +244,15 @@ internal static class CanDataFrameReader
             byte[] record = segment.Array!;
             int count = segment.Count;
             ReadOnlySpan<byte> span = new(record, segment.Offset, count);
+            if (id.IsInvalid(span) || bytes.IsInvalid(span) || (master?.IsInvalid(span) ?? false) || (frame?.IsInvalid(span) ?? false))
+            {
+                index++;
+                continue;
+            }
+
+            Mdf4Channel? Valid(Mdf4Channel? channel) => channel is not null && !channel.IsInvalid(record.AsSpan(segment.Offset, count)) ? channel : null;
+            Mdf4Channel? ide = Valid(ideChannel), dlc = Valid(dlcChannel), length = Valid(lengthChannel), bus = Valid(busChannelField);
+            Mdf4Channel? dir = Valid(dirChannel), edl = Valid(edlChannel), brs = Valid(brsChannel), esi = Valid(esiChannel);
 
             double time = master is null ? index : Physical(master, span, index);
             ulong rawId = (ulong)id.DecodeRawNumber(span, index);
@@ -239,7 +260,8 @@ internal static class CanDataFrameReader
             uint frameId = (uint)(rawId & 0x1FFFFFFF);
             bool fd = edl is not null && Flag(edl, span, index);
 
-            byte[] payload = bytes.DecodeRaw(span, index) as byte[] ?? Array.Empty<byte>();
+            byte[] payload = bytes.DecodeRaw(span, index) as byte[]
+                ?? throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' did not yield bytes");
             int dataLength = payload.Length;
             if (length is not null)
             {

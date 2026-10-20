@@ -203,6 +203,12 @@ internal static class CanDataFrameReader
         Mdf4Channel? brs = Find("BRS");
         Mdf4Channel? esi = Find("ESI");
         Mdf4Channel? master = group.MasterChannel;
+        if (master is null && (group.Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
+        {
+            // Same rule as Mdf4ChannelGroup.ReadTimestamps: record indices are not the time stamps.
+            throw new NotSupportedException($"Channel group '{group.Name}' uses the master channel of another group (remote master), which is not supported.");
+        }
+
 
         long index = 0;
         foreach (ArraySegment<byte> segment in group.DataGroup.EnumerateRecords(group))

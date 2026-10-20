@@ -254,6 +254,82 @@ public class RobustnessTests
     }
 
     [Fact]
+    public void A_Value_To_Text_Table_Nesting_A_Text_Input_Conversion_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        var textToValue = new byte[24 + 8];
+        textToValue[0] = (byte)Mdf4ConversionType.TextToValue;
+        BinaryPrimitives.WriteUInt16LittleEndian(textToValue.AsSpan(6), 1);
+        PendingBlock inner = raw.Block("##CC", new object?[4], textToValue);
+
+        var valueToText = new byte[24 + 8];
+        valueToText[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(valueToText.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(valueToText.AsSpan(6), 1);
+        PendingBlock outer = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("zero"), inner }, valueToText);
+
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: outer);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 3 })));
+
+        Action open = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            file.FindChannel("v")!.ReadValues();
+        };
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*takes a text*");
+    }
+
+    [Fact]
+    public void Channels_Sharing_Signal_Data_Load_It_Once()
+    {
+        // Forty VLSD channels point at one SD block. The file budget allows that block once and
+        // a little more: loading it per channel would exceed it at the second channel.
+        const int Channels = 40;
+        byte[] signal = SignalData(64 * 1024);
+        var raw = new RawMdf();
+        PendingBlock sd = raw.Block("##SD", Array.Empty<object?>(), signal);
+        PendingBlock? next = null;
+        for (int i = Channels - 1; i >= 0; i--)
+        {
+            next = raw.Channel("s" + i, Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, (uint)(i * 8), 64, next: next, data: sd);
+        }
+
+        PendingBlock cg = raw.ChannelGroup(0, 1, Channels * 8, 0, next);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[Channels * 8])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxSignalDataSize = signal.Length + 1024 });
+        foreach (Mdf4Channel channel in file.Channels)
+        {
+            channel.ReadValues().Single().Should().BeOfType<byte[]>().Which.Should().HaveCount(signal.Length - 4);
+        }
+    }
+
+    [Fact]
+    public void The_Signal_Data_Budget_Covers_The_Whole_File()
+    {
+        byte[] signal = SignalData(64 * 1024);
+        var raw = new RawMdf();
+        PendingBlock second = raw.Channel("b", Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, 8, 64, data: raw.Block("##SD", Array.Empty<object?>(), signal));
+        PendingBlock first = raw.Channel("a", Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, 0, 64, next: second, data: raw.Block("##SD", Array.Empty<object?>(), signal));
+        PendingBlock cg = raw.ChannelGroup(0, 1, 16, 0, first);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[16])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxSignalDataSize = signal.Length * 3 / 2 });
+        file.FindChannel("a")!.ReadValues().Should().ContainSingle();
+        Action second_ = () => file.FindChannel("b")!.ReadValues();
+        second_.Should().Throw<Mdf4FormatException>().WithMessage("*MaxSignalDataSize*");
+    }
+
+    private static byte[] SignalData(int size)
+    {
+        // One SD entry: a 4-byte length and the bytes.
+        var data = new byte[size];
+        BinaryPrimitives.WriteUInt32LittleEndian(data, (uint)(size - 4));
+        return data;
+    }
+
+    [Fact]
     public void A_Conversion_That_Refers_To_Itself_Is_Detected()
     {
         var raw = new RawMdf();

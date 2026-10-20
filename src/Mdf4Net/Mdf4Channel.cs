@@ -450,23 +450,38 @@ public sealed class Mdf4Channel
             return _signalData;
         }
 
-        long max = ChannelGroup.DataGroup.File.Reader.Options.MaxSignalDataSize;
+        // Shared per file, not per channel: several channels may point at the same signal data,
+        // and loading it once per channel would multiply the memory a small file can claim. The
+        // budget covers everything loaded for the file, so distinct lists over the same
+        // compressed blocks cannot multiply it either.
+        BlockReader reader = ChannelGroup.DataGroup.File.Reader;
+        long key = _signalDataGroup?.Offset ?? _dataLink;
+        if (reader.SignalData.TryGetValue(key, out byte[]? shared))
+        {
+            _signalData = shared;
+            return shared;
+        }
+
+        long max = reader.Options.MaxSignalDataSize - reader.SignalDataBytes;
         using var buffer = new MemoryStream();
         IEnumerable<ArraySegment<byte>> chunks = _signalDataGroup is not null
             ? ChannelGroup.DataGroup.EnumerateRecords(_signalDataGroup)
-            : DataChain.Enumerate(ChannelGroup.DataGroup.File.Reader, _dataLink, "##SD");
+            : DataChain.Enumerate(reader, _dataLink, "##SD");
         foreach (ArraySegment<byte> chunk in chunks)
         {
             if (buffer.Length + chunk.Count > max || buffer.Length + chunk.Count > int.MaxValue)
             {
-                throw Mdf4FormatException.At(Offset, $"Signal data of channel '{Name}' exceeds MaxSignalDataSize");
+                throw Mdf4FormatException.At(Offset, $"Signal data of channel '{Name}' exceeds what MaxSignalDataSize leaves for this file");
             }
 
             buffer.Write(chunk.Array!, chunk.Offset, chunk.Count);
         }
 
-        _signalData = buffer.ToArray();
-        return _signalData;
+        byte[] data = buffer.ToArray();
+        reader.SignalData[key] = data;
+        reader.SignalDataBytes += data.Length;
+        _signalData = data;
+        return data;
     }
 
     private object? DecodeBytes(ReadOnlySpan<byte> bytes)

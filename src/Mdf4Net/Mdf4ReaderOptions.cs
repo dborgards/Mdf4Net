@@ -22,8 +22,9 @@ public sealed class Mdf4ReaderOptions
     public int MaxDecompressedBlockSize { get; init; } = 256 * 1024 * 1024;
 
     /// <summary>
-    /// Largest total of variable-length signal data (SD blocks or a VLSD channel group) that is
-    /// loaded for one channel. Default 1 GiB.
+    /// Largest total of variable-length signal data (SD blocks or VLSD channel groups) that is
+    /// held in memory for one file, all channels together; channels sharing signal data count it
+    /// once. Default 1 GiB.
     /// </summary>
     public long MaxSignalDataSize { get; init; } = 1024L * 1024 * 1024;
 

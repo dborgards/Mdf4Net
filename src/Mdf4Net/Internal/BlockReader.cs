@@ -111,6 +111,15 @@ internal sealed class BlockReader
     /// <summary>Conversions being parsed right now, to detect a reference cycle.</summary>
     public HashSet<long> ActiveConversions { get; } = new();
 
+    /// <summary>
+    /// Loaded variable-length signal data, by data link (SD/DZ/DL/HL) or by VLSD channel group
+    /// offset: channels that share signal data share one array.
+    /// </summary>
+    public Dictionary<long, byte[]> SignalData { get; } = new();
+
+    /// <summary>Bytes held in <see cref="SignalData"/>, bounded by MaxSignalDataSize for the whole file.</summary>
+    public long SignalDataBytes { get; set; }
+
     public BlockHeader ReadHeader(long offset)
     {
         if (offset < IdentificationSize || offset > FileLength - HeaderSize)

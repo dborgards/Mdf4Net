@@ -54,6 +54,31 @@ public class CanBusLoggingTests
         group.Flags.Should().HaveFlag(Mdf4ChannelGroupFlags.BusEvent);
         group.ReadCanDataFrames().Should().Equal(frames);
         file.ReadCanDataFrames().Should().Equal(frames);
+
+        // The generic channel API reads the same group the same way.
+        group.ReadTimestamps().Should().Equal(frames.Select(f => f.Timestamp));
+        group.FindChannel("CAN_DataFrame.ID")!.ReadDoubles().Should().Equal(frames.Select(f => (double)f.Id));
+        group.FindChannel("CAN_DataFrame.DataLength")!.ReadDoubles().Should().Equal(frames.Select(f => (double)f.Data.Length));
+    }
+
+    [Fact]
+    public void A_Bus_Logging_Group_With_A_Remote_Master_Is_Refused_On_Both_Read_Paths()
+    {
+        // A CAN_DataFrame group without its own time channel, taking it from another group
+        // (MDF 4.20 remote master): record indices must not be passed off as time stamps.
+        var raw = new Mdf4Net.Tests.Infrastructure.RawMdf();
+        var dataBytes = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 4, 64, flags: Mdf4ChannelFlags.BusEvent);
+        var id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 29, next: dataBytes, flags: Mdf4ChannelFlags.BusEvent);
+        var frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 0, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        var cg = raw.ChannelGroup(0, 3, 12, 0, frame, flags: (ushort)(Mdf4ChannelGroupFlags.BusEvent | Mdf4ChannelGroupFlags.RemoteMaster));
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[36])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4ChannelGroup group = file.ChannelGroups.Single();
+        group.IsCanDataFrameGroup().Should().BeTrue();
+        ((Action)(() => group.ReadCanDataFrames().ToList())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
+        ((Action)(() => file.ReadCanDataFrames())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
+        ((Action)(() => group.ReadTimestamps())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
     }
 
     [Fact]

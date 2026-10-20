@@ -225,6 +225,19 @@ public sealed class Mdf4Conversion
                 : TextBlocks.ReadText(reader, reference);
         }
 
+        // Value/range-to-text tables pass the numeric raw value on to a nested conversion, which
+        // therefore has to take a number.
+        if (type is Mdf4ConversionType.ValueToText or Mdf4ConversionType.ValueRangeToText)
+        {
+            foreach (object? reference in references)
+            {
+                if (reference is Mdf4Conversion { TakesText: true } nested)
+                {
+                    throw Mdf4FormatException.At(link, $"A {type} conversion refers to a {nested.Type} conversion, which takes a text");
+                }
+            }
+        }
+
         return new Mdf4Conversion(
             type,
             TextBlocks.ReadText(reader, block.Link(0)),

@@ -300,5 +300,12 @@ public sealed class Mdf4DataGroup
             yielded++;
             yield return new ArraySegment<byte>(buffer, 0, size);
         }
+
+        // A finalized sorted group has no other record in its data: bytes after the declared
+        // last one contradict the count and would otherwise be dropped unseen.
+        if (File.IsFinalized && RecordIdSize == 0 && !target.IsVariableLengthSignalData && data.TryRead(id, 0, 1))
+        {
+            throw Mdf4FormatException.At(target.Offset, $"Channel group declares {limit} records, the data holds more");
+        }
     }
 }

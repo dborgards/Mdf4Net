@@ -77,12 +77,21 @@ public sealed class Mdf4ConversionDefinition
         return new(interpolate ? Mdf4ConversionType.ValueToValueInterpolated : Mdf4ConversionType.ValueToValue, values, Array.Empty<string?>());
     }
 
+    private static void RequireRange(double min, double max)
+    {
+        if (double.IsNaN(min) || double.IsNaN(max) || min > max)
+        {
+            throw new ArgumentException($"The range from {min} to {max} is not valid: the minimum has to be at most the maximum.", "ranges");
+        }
+    }
+
     /// <summary>A value range to value table; values outside every range map to <paramref name="defaultValue"/>.</summary>
     public static Mdf4ConversionDefinition RangeToValue(IEnumerable<(double Min, double Max, double Value)> ranges, double defaultValue)
     {
         var values = new List<double>();
         foreach ((double min, double max, double value) in ranges ?? throw new ArgumentNullException(nameof(ranges)))
         {
+            RequireRange(min, max);
             values.Add(min);
             values.Add(max);
             values.Add(value);
@@ -120,6 +129,7 @@ public sealed class Mdf4ConversionDefinition
         var texts = new List<string?>();
         foreach ((double min, double max, string text) in ranges ?? throw new ArgumentNullException(nameof(ranges)))
         {
+            RequireRange(min, max);
             values.Add(min);
             values.Add(max);
             texts.Add(text);

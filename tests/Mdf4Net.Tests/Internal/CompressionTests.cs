@@ -10,6 +10,73 @@ namespace Mdf4Net.Tests.Internal;
 
 public class CompressionTests
 {
+    [Theory]
+    [InlineData(CompressionLevel.NoCompression)]
+    [InlineData(CompressionLevel.Fastest)]
+    [InlineData(CompressionLevel.Optimal)]
+    public void The_Inflater_Reads_What_Deflate_Writes(CompressionLevel level)
+    {
+        var random = new Random(7);
+        foreach (int length in new[] { 0, 1, 100, 65_535, 65_536, 300_000 })
+        {
+            foreach (int pattern in new[] { 0, 1, 2 })
+            {
+                var data = new byte[length];
+                for (int i = 0; i < length; i++)
+                {
+                    data[i] = pattern switch { 0 => (byte)random.Next(256), 1 => (byte)(i % 7), _ => (byte)(i / 1000) };
+                }
+
+                byte[] compressed = Zlib.Compress(data, 0, data.Length, level);
+                Zlib.Decompress(compressed, data.Length, 0).Should().Equal(data);
+            }
+        }
+    }
+
+    [Fact]
+    public void Bytes_Between_The_Deflate_Data_And_The_Trailer_Are_Refused()
+    {
+        byte[] data = Encoding.ASCII.GetBytes("a few bytes, a few bytes, a few bytes");
+        byte[] compressed = Zlib.Compress(data, 0, data.Length);
+        var padded = new byte[compressed.Length + 1];
+        Array.Copy(compressed, padded, compressed.Length - 4);
+        Array.Copy(compressed, compressed.Length - 4, padded, padded.Length - 4, 4);
+
+        Action read = () => Zlib.Decompress(padded, data.Length, 0);
+
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*between its deflate data*");
+    }
+
+    [Fact]
+    public void Damaged_Streams_Fail_Only_With_A_Format_Exception()
+    {
+        var random = new Random(11);
+        var data = new byte[5000];
+        for (int i = 0; i < data.Length; i++)
+        {
+            data[i] = (byte)(random.Next(4) * 40);
+        }
+
+        byte[] compressed = Zlib.Compress(data, 0, data.Length);
+        for (int round = 0; round < 3000; round++)
+        {
+            byte[] damaged = (byte[])compressed.Clone();
+            for (int hits = random.Next(1, 4); hits > 0; hits--)
+            {
+                damaged[random.Next(damaged.Length)] ^= (byte)(1 << random.Next(8));
+            }
+
+            byte[] cut = round % 5 == 0 ? damaged.AsSpan(0, random.Next(damaged.Length)).ToArray() : damaged;
+            try
+            {
+                Zlib.Decompress(cut, data.Length, 0);
+            }
+            catch (Mdf4FormatException)
+            {
+            }
+        }
+    }
+
     [Fact]
     public void Adler32_Matches_The_Reference_Value()
     {

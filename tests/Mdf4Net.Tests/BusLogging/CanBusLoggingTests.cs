@@ -136,6 +136,13 @@ public class CanBusLoggingTests
     }
 
     [Fact]
+    public void Undefined_Flag_Bits_And_Directions_Are_Refused()
+    {
+        ((Action)(() => _ = new CanDataFrame(0, 1, new byte[1], (CanFrameFlags)0x80))).Should().Throw<ArgumentException>().WithMessage("*not defined*");
+        ((Action)(() => _ = new CanDataFrame(0, 1, new byte[1], CanFrameFlags.None, 1, (CanDirection)2))).Should().Throw<ArgumentException>().WithMessage("*direction*");
+    }
+
+    [Fact]
     public void Frames_Compare_By_Value()
     {
         var a = new CanDataFrame(1, 2, new byte[] { 3 });

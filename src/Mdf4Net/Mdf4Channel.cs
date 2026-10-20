@@ -368,6 +368,10 @@ public sealed class Mdf4Channel
                     throw Mdf4FormatException.At(Offset, $"VLSD channel '{Name}' refers to a channel group that is not a VLSD group");
                 }
             }
+            else if (header.Id is not ("##SD" or "##DZ" or "##DL" or "##HL"))
+            {
+                throw Mdf4FormatException.At(Offset, $"VLSD channel '{Name}' refers to a {header.Id} block, not to signal data");
+            }
         }
         else if (ChannelType == Mdf4ChannelType.MaximumLength)
         {
@@ -437,6 +441,11 @@ public sealed class Mdf4Channel
         }
 
         bool isString = DataType is >= Mdf4DataType.StringLatin1 and <= Mdf4DataType.StringUtf16Be && !IsNumeric;
+        if (!IsNumeric && !isString && Conversion.Type != Mdf4ConversionType.Identity)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' holds {DataType} values, which a {Conversion.Type} conversion cannot be applied to");
+        }
+
         if (isString && Conversion.Type != Mdf4ConversionType.Identity && !Conversion.TakesText)
         {
             throw Mdf4FormatException.At(Offset, $"Channel '{Name}' holds {DataType} texts but has a {Conversion.Type} conversion, which takes numbers");

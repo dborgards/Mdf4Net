@@ -24,6 +24,11 @@ public sealed class Mdf4ChannelGroupWriter
         RecordSize = recordSize;
         foreach (ChannelLayout layout in ChannelLayout.Flatten(TopLevel))
         {
+            if (_layouts.ContainsKey(layout.Definition))
+            {
+                throw new ArgumentException($"Channel '{layout.Definition.Name}' is used more than once in the definition; a channel object is the handle of one position in the record.", nameof(definition));
+            }
+
             _layouts[layout.Definition] = layout;
             if (layout.Definition.IsVariableLength)
             {

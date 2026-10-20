@@ -232,6 +232,20 @@ public sealed class Mdf4Conversion
             }
         }
 
+        // A range is searched as min..max: an inverted or NaN range could never match, and the
+        // values it covers would silently map to the default.
+        if (type is Mdf4ConversionType.ValueRangeToValue or Mdf4ConversionType.ValueRangeToText)
+        {
+            int step = type == Mdf4ConversionType.ValueRangeToValue ? 3 : 2;
+            for (int i = 0; i + 1 < valCount; i += step)
+            {
+                if (double.IsNaN(values[i]) || double.IsNaN(values[i + 1]) || values[i] > values[i + 1])
+                {
+                    throw Mdf4FormatException.At(link, $"A {type} conversion has a range from {values[i]} to {values[i + 1]}");
+                }
+            }
+        }
+
         var references = new object?[refCount];
         for (int i = 0; i < refCount; i++)
         {

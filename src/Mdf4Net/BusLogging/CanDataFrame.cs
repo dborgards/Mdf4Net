@@ -49,6 +49,17 @@ public readonly struct CanDataFrame : IEquatable<CanDataFrame>
     /// <exception cref="ArgumentException">The identifier or the data length is not valid for the flags.</exception>
     public CanDataFrame(double timestamp, uint id, ReadOnlyMemory<byte> data, CanFrameFlags flags = CanFrameFlags.None, byte busChannel = 1, CanDirection direction = CanDirection.Receive)
     {
+        const CanFrameFlags KnownFlags = CanFrameFlags.Extended | CanFrameFlags.FlexibleDataRate | CanFrameFlags.BitRateSwitch | CanFrameFlags.ErrorStateIndicator;
+        if ((flags & ~KnownFlags) != 0)
+        {
+            throw new ArgumentException($"The flags 0x{(byte)flags:X2} contain bits that are not defined.", nameof(flags));
+        }
+
+        if (direction != CanDirection.Receive && direction != CanDirection.Transmit)
+        {
+            throw new ArgumentException($"{(byte)direction} is not a valid direction.", nameof(direction));
+        }
+
         uint maxId = (flags & CanFrameFlags.Extended) != 0 ? 0x1FFFFFFFu : 0x7FFu;
         if (id > maxId)
         {

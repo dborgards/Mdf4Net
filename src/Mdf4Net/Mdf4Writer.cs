@@ -140,8 +140,10 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
             throw new ArgumentException("A channel group has at most one master channel.", nameof(definition));
         }
 
-        definition.Freeze();
+        // Frozen only once the layout was built: a definition that cannot be written stays
+        // changeable, so the caller can correct it.
         var group = new Mdf4ChannelGroupWriter(this, definition, _options);
+        definition.Freeze();
         _groups.Add(group);
         return group;
     }

@@ -78,7 +78,7 @@ public class UnsortedReaderTests
     }
 
     [Fact]
-    public void A_Finalized_File_Is_Read_Up_To_The_Cycle_Count()
+    public void A_Finalized_File_With_More_Records_Than_Cycles_Is_A_Format_Error()
     {
         var raw = new RawMdf();
         PendingBlock value = raw.Channel("value", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
@@ -86,8 +86,11 @@ public class UnsortedReaderTests
         PendingBlock dt = raw.DataBlock(new byte[] { 1, 2, 3, 4 });
         byte[] bytes = raw.Build(raw.DataGroup(0, cg, dt));
 
+        // Two cycles declared, four records stored: the extra ones contradict the count and must
+        // not be dropped without a word.
         using Mdf4File file = MdfTestFile.Open(bytes);
-        file.FindChannel("value")!.ReadDoubles().Should().Equal(1, 2);
+        Mdf4Channel channel = file.FindChannel("value")!;
+        channel.Invoking(c => c.ReadDoubles()).Should().Throw<Mdf4FormatException>().WithMessage("*declares 2 records*more*");
     }
 
     internal static byte[] BuildUnsorted(byte recordIdSize, out List<(double Time, byte Value, bool Valid, byte[] Frame, string Text)> expected, out int virtualCount)

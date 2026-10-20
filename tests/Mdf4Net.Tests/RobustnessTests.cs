@@ -888,6 +888,7 @@ public class RobustnessTests
     [Theory]
     [InlineData(Mdf4DataType.StringUtf8, Mdf4ConversionType.Linear)]
     [InlineData(Mdf4DataType.UnsignedIntegerLe, Mdf4ConversionType.TextToValue)]
+    [InlineData(Mdf4DataType.ByteArray, Mdf4ConversionType.Linear)]
     public void A_Conversion_That_Does_Not_Fit_The_Channel_Is_A_Format_Error_Whatever_The_Samples(Mdf4DataType dataType, Mdf4ConversionType type)
     {
         foreach (bool allInvalid in new[] { false, true })
@@ -911,6 +912,53 @@ public class RobustnessTests
             ((Action)(() => file.FindChannel("v")!.ReadValues())).Should().Throw<Mdf4FormatException>();
             file.FindChannel("v")!.ReadRawValues().Should().HaveCount(1);
         }
+    }
+
+    [Theory]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 10.0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, 10.0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, double.NaN)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, double.NaN)]
+    public void A_Range_Table_With_An_Inverted_Range_Is_A_Format_Error(Mdf4ConversionType type, double min)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 32];
+        data[0] = (byte)type;
+        bool toText = type == Mdf4ConversionType.ValueRangeToText;
+
+        // One range 10..0 (inverted), then its output, then the default.
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)(toText ? 2 : 0));
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)(toText ? 2 : 4));
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(24), min);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(32), 0);
+        var links = new object?[toText ? 6 : 4];
+        if (toText)
+        {
+            links[4] = raw.Text("in");
+            links[5] = raw.Text("other");
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: conversion);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 5 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*has a range from*to 0*");
+    }
+
+    [Fact]
+    public void A_Variable_Length_Channel_Must_Link_To_Signal_Data_Whatever_The_Samples()
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.VariableLength, Mdf4DataType.StringUtf8, 0, 64, data: raw.Text("not signal data"), flags: Mdf4ChannelFlags.AllValuesInvalid);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 8, 0, channel), raw.DataBlock(new byte[8])));
+
+        Action read = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            file.FindChannel("v")!.ReadRawValues();
+        };
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*not to signal data*");
     }
 
     [Fact]

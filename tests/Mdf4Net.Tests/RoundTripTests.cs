@@ -619,6 +619,39 @@ public class RoundTripTests
     }
 
     [Fact]
+    public void A_Range_Needs_A_Minimum_Not_Above_Its_Maximum()
+    {
+        ((Action)(() => Mdf4ConversionDefinition.RangeToValue(new[] { (5.0, 1.0, 0.0) }, 0))).Should().Throw<ArgumentException>().WithMessage("*minimum*");
+        ((Action)(() => Mdf4ConversionDefinition.RangeToText(new[] { (double.NaN, 1.0, "x") }))).Should().Throw<ArgumentException>().WithMessage("*minimum*");
+    }
+
+    [Fact]
+    public void A_Channel_Used_Twice_In_A_Definition_Is_Refused_And_The_Definition_Stays_Open()
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        Mdf4ChannelDefinition shared = Mdf4ChannelDefinition.UInt8("shared");
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        definition.Add(new Mdf4ChannelDefinition("a", Mdf4DataType.ByteArray, 8) { Members = new[] { shared } });
+        definition.Add(new Mdf4ChannelDefinition("b", Mdf4DataType.ByteArray, 8) { Members = new[] { shared } });
+
+        ((Action)(() => writer.AddChannelGroup(definition))).Should().Throw<ArgumentException>().WithMessage("*more than once*");
+        definition.IsFrozen.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_Definition_That_Cannot_Be_Laid_Out_Stays_Changeable()
+    {
+        using var stream = new System.IO.MemoryStream();
+        using Mdf4Writer writer = Mdf4Writer.Create(stream, leaveOpen: true);
+        var definition = new Mdf4ChannelGroupDefinition("G");
+        definition.Add(new Mdf4ChannelDefinition("far", Mdf4DataType.UnsignedIntegerLe, 8) { ByteOffset = int.MaxValue });
+
+        ((Action)(() => writer.AddChannelGroup(definition))).Should().Throw<ArgumentException>();
+        definition.IsFrozen.Should().BeFalse();
+    }
+
+    [Fact]
     public void A_Table_Needs_Distinct_Keys()
     {
         var entries = new[] { new KeyValuePair<double, double>(1, 1), new KeyValuePair<double, double>(1, 2) };

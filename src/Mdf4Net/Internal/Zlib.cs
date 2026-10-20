@@ -17,8 +17,15 @@ internal static class Zlib
         // CMF 0x78: deflate, 32 KiB window. FLG 0x9C: default level, no dictionary, check bits.
         output.WriteByte(0x78);
         output.WriteByte(0x9C);
-        using (var deflate = new DeflateStream(output, level, leaveOpen: true))
+        if (count == 0)
         {
+            // DeflateStream writes nothing for no input at all; a deflate stream needs a final block.
+            output.WriteByte(0x03);
+            output.WriteByte(0x00);
+        }
+        else
+        {
+            using var deflate = new DeflateStream(output, level, leaveOpen: true);
             deflate.Write(data, offset, count);
         }
 
@@ -49,35 +56,10 @@ internal static class Zlib
         }
 
         var result = new byte[expectedLength];
-        try
+        int end = Inflater.Inflate(compressed, 2, compressed.Length - 4, result, blockOffset);
+        if (end != compressed.Length - 4)
         {
-            using var input = new MemoryStream(compressed, 2, compressed.Length - 6, writable: false);
-            using var inflate = new DeflateStream(input, CompressionMode.Decompress);
-            int total = 0;
-            while (total < expectedLength)
-            {
-                int read = inflate.Read(result, total, expectedLength - total);
-                if (read == 0)
-                {
-                    break;
-                }
-
-                total += read;
-            }
-
-            if (total != expectedLength)
-            {
-                throw Mdf4FormatException.At(blockOffset, $"DZ block inflates to {total} bytes, the block declares {expectedLength}");
-            }
-
-            if (inflate.ReadByte() != -1)
-            {
-                throw Mdf4FormatException.At(blockOffset, $"DZ block inflates to more than the {expectedLength} bytes it declares");
-            }
-        }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException)
-        {
-            throw new Mdf4FormatException($"DZ block at 0x{blockOffset:X} holds corrupt deflate data.", ex);
+            throw Mdf4FormatException.At(blockOffset, "DZ block has bytes between its deflate data and its Adler-32 trailer");
         }
 
         int t = compressed.Length - 4;

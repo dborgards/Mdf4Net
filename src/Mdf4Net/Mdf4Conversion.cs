@@ -204,6 +204,10 @@ public sealed class Mdf4Conversion
             throw Mdf4FormatException.At(link, $"CC block declares {refCount} references but has {block.Links.Length - 4}");
         }
 
+        // Checked before any referenced block is followed: a block that does not fit its type is
+        // refused as a whole, not partly parsed and cached.
+        CheckShape(link, type, valCount, refCount);
+
         var values = new double[valCount];
         for (int i = 0; i < valCount; i++)
         {
@@ -220,12 +224,15 @@ public sealed class Mdf4Conversion
             }
 
             BlockHeader header = reader.ReadHeader(reference);
+            if (header.Id == "##CC" && !MayReferToConversions(type))
+            {
+                throw Mdf4FormatException.At(link, $"A {type} conversion cannot refer to a conversion");
+            }
+
             references[i] = header.Id == "##CC"
                 ? Read(reader, reference, depth + 1)
                 : TextBlocks.ReadText(reader, reference);
         }
-
-        CheckShape(link, type, valCount, refCount);
 
         // Value/range-to-text tables pass the numeric raw value on to a nested conversion, which
         // therefore has to take a number.
@@ -250,25 +257,28 @@ public sealed class Mdf4Conversion
     }
 
     /// <summary>
-    /// The numbers of values and references each conversion type is defined with: two linear and
-    /// six rational parameters, key/value pairs, range triples plus a default, one text per key
-    /// plus a default. A block that does not have them would otherwise be applied with missing
-    /// parameters read as zero.
+    /// The numbers of values and references each conversion type is defined with: no parameters
+    /// for the identity, two linear and six rational parameters, a formula text, key/value pairs,
+    /// range triples plus a default, one text per key plus a default, one value-to-text table per
+    /// bit mask. A block that does not have them would otherwise be applied with missing
+    /// parameters read as zero, or carry references nothing reads.
     /// </summary>
     private static void CheckShape(long link, Mdf4ConversionType type, int values, int references)
     {
         bool valid = type switch
         {
-            Mdf4ConversionType.Identity => true,
-            Mdf4ConversionType.Linear => values == 2,
-            Mdf4ConversionType.Rational => values == 6,
-            Mdf4ConversionType.ValueToValueInterpolated or Mdf4ConversionType.ValueToValue => values >= 2 && values % 2 == 0,
-            Mdf4ConversionType.ValueRangeToValue => values % 3 == 1,
+            Mdf4ConversionType.Identity => values == 0 && references == 0,
+            Mdf4ConversionType.Linear => values == 2 && references == 0,
+            Mdf4ConversionType.Rational => values == 6 && references == 0,
+            Mdf4ConversionType.Algebraic => values == 0 && references == 1,
+            Mdf4ConversionType.ValueToValueInterpolated or Mdf4ConversionType.ValueToValue => values >= 2 && values % 2 == 0 && references == 0,
+            Mdf4ConversionType.ValueRangeToValue => values % 3 == 1 && references == 0,
             Mdf4ConversionType.ValueToText => references == values + 1,
             Mdf4ConversionType.ValueRangeToText => values % 2 == 0 && references == (values / 2) + 1,
             Mdf4ConversionType.TextToValue => values == references + 1,
-            Mdf4ConversionType.TextToText => references % 2 == 1,
-            _ => true, // algebraic, bitfield text and unknown types are refused when applied
+            Mdf4ConversionType.TextToText => values == 0 && references % 2 == 1,
+            Mdf4ConversionType.BitfieldText => values >= 1 && references == values,
+            _ => true, // unknown types are refused when applied
         };
 
         if (!valid)
@@ -276,6 +286,13 @@ public sealed class Mdf4Conversion
             throw Mdf4FormatException.At(link, $"A {type} conversion cannot have {values} values and {references} references");
         }
     }
+
+    /// <summary>
+    /// Whether the references may be nested conversions: the outputs of the value and range text
+    /// tables and the tables of a bitfield conversion. Keys and formulas are texts.
+    /// </summary>
+    private static bool MayReferToConversions(Mdf4ConversionType type)
+        => type is Mdf4ConversionType.ValueToText or Mdf4ConversionType.ValueRangeToText or Mdf4ConversionType.BitfieldText;
 
     private double Param(int index) => index < _values.Length ? _values[index] : 0;
 

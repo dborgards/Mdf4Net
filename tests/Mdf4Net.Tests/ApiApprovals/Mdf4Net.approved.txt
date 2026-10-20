@@ -349,6 +349,7 @@ namespace Mdf4Net
         public int MaxNestingDepth { get; init; }
         public int MaxRecordSize { get; init; }
         public long MaxSignalDataSize { get; init; }
+        public long MaxVirtualRecordCount { get; init; }
         public static Mdf4Net.Mdf4ReaderOptions Default { get; }
     }
     public sealed class Mdf4RecordBuilder

@@ -24,7 +24,7 @@ internal static class Time
 
         // Bit 0: the time stamp is the local wall clock, not UTC. Bit 1: the offsets are valid.
         bool localTime = (flags & 0x01) != 0;
-        bool offsetsValid = (flags & 0x02) != 0 && Math.Abs(tz + dst) < 14 * 60;
+        bool offsetsValid = (flags & 0x02) != 0 && Math.Abs(tz + dst) <= 14 * 60;
         TimeSpan zone = offsetsValid ? TimeSpan.FromMinutes(tz + dst) : TimeSpan.Zero;
 
         if (localTime)

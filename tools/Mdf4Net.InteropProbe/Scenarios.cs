@@ -251,8 +251,8 @@ internal static class Scenarios
     private static Expectation MultiGroup(string path)
     {
         // Year 2500: a start time past the range a signed 64-bit nanosecond count would allow,
-        // which MDF stores as unsigned.
-        var start = new DateTimeOffset(2500, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        // which MDF stores as unsigned. +14:00 is the largest time zone offset there is.
+        var start = new DateTimeOffset(2500, 1, 2, 3, 4, 5, TimeSpan.FromHours(14));
         var expectation = new Expectation { Start = start };
         using Mdf4Writer writer = Mdf4Writer.Create(path, new Mdf4WriterOptions { DataBlockSize = 4096, StartTime = start });
 
@@ -300,8 +300,10 @@ internal static class Scenarios
 
     private static Expectation Can(string path, Mdf4Compression compression)
     {
-        var expectation = new Expectation();
-        using Mdf4Writer writer = Mdf4Writer.Create(path, new Mdf4WriterOptions { Compression = compression, DataBlockSize = 8192 });
+        // -14:00, the most negative time zone offset there is.
+        var start = new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.FromHours(-14));
+        var expectation = new Expectation { Start = start };
+        using Mdf4Writer writer = Mdf4Writer.Create(path, new Mdf4WriterOptions { Compression = compression, DataBlockSize = 8192, StartTime = start });
         CanDataFrameWriter can = writer.AddCanDataFrameGroup(new CanBusLoggingOptions { NetworkName = "CAN1" });
 
         var random = new Random(4711);

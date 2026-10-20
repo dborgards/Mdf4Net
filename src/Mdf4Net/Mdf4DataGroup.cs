@@ -168,6 +168,29 @@ public sealed class Mdf4DataGroup
         var id = new byte[8];
         byte[] buffer = new byte[Math.Max(target.RecordSize, 4)];
 
+        if (RecordIdSize == 0 && target.RecordSize == 0 && !target.IsVariableLengthSignalData)
+        {
+            // Only virtual channels: no record bytes are stored, and the cycle count of a
+            // finalized group says how many records there are. An unfinalized file has no
+            // reliable count, and no data to count either.
+            if (!File.IsFinalized)
+            {
+                yield break;
+            }
+
+            if (target.CycleCount > (ulong)File.Reader.Options.MaxVirtualRecordCount)
+            {
+                throw Mdf4FormatException.At(target.Offset, $"Channel group declares {target.CycleCount} records without data, more than MaxVirtualRecordCount");
+            }
+
+            for (ulong i = 0; i < target.CycleCount; i++)
+            {
+                yield return new ArraySegment<byte>(buffer, 0, 0);
+            }
+
+            yield break;
+        }
+
         while (yielded < limit)
         {
             Mdf4ChannelGroup group = target;
@@ -233,12 +256,7 @@ public sealed class Mdf4DataGroup
             int size = group.RecordSize;
             if (size == 0)
             {
-                // A group without record bytes holds no data; nothing to iterate.
-                if (RecordIdSize == 0)
-                {
-                    yield break;
-                }
-
+                // Unsorted: each record is its record id alone (sorted groups are handled above).
                 if (ReferenceEquals(group, target))
                 {
                     yielded++;

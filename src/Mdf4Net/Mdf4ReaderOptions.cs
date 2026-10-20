@@ -31,6 +31,13 @@ public sealed class Mdf4ReaderOptions
     /// <summary>Largest record (channel and invalidation bytes) of a channel group. Default 16 MiB.</summary>
     public int MaxRecordSize { get; init; } = 16 * 1024 * 1024;
 
+    /// <summary>
+    /// Most records of a channel group whose records hold no bytes (only virtual channels). Such
+    /// records are not stored: the cycle count alone decides how many samples are produced, so
+    /// it is bounded here rather than by the size of the file. Default 16,777,216.
+    /// </summary>
+    public long MaxVirtualRecordCount { get; init; } = 16 * 1024 * 1024;
+
     /// <summary>Deepest nesting of compositions and nested conversions that is followed. Default 32.</summary>
     public int MaxNestingDepth { get; init; } = 32;
 }

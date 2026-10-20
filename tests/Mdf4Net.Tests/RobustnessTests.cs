@@ -340,6 +340,17 @@ public class RobustnessTests
     [InlineData(Mdf4ConversionType.ValueRangeToText, 3, 2)]
     [InlineData(Mdf4ConversionType.TextToValue, 1, 1)]
     [InlineData(Mdf4ConversionType.TextToText, 0, 2)]
+    [InlineData(Mdf4ConversionType.TextToText, 1, 1)]
+    [InlineData(Mdf4ConversionType.Identity, 1, 0)]
+    [InlineData(Mdf4ConversionType.Identity, 0, 1)]
+    [InlineData(Mdf4ConversionType.Linear, 2, 1)]
+    [InlineData(Mdf4ConversionType.Rational, 6, 1)]
+    [InlineData(Mdf4ConversionType.Algebraic, 0, 0)]
+    [InlineData(Mdf4ConversionType.Algebraic, 1, 1)]
+    [InlineData(Mdf4ConversionType.ValueToValue, 2, 1)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 1, 1)]
+    [InlineData(Mdf4ConversionType.BitfieldText, 1, 2)]
+    [InlineData(Mdf4ConversionType.BitfieldText, 0, 0)]
     public void A_Conversion_Without_The_Parameters_Of_Its_Type_Is_A_Format_Error(Mdf4ConversionType type, int values, int references)
     {
         var raw = new RawMdf();
@@ -347,10 +358,14 @@ public class RobustnessTests
         data[0] = (byte)type;
         BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)references);
         BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)values);
+
+        // The references point at a block that is neither a text nor a conversion: the shape is
+        // refused before any of them is followed.
+        PendingBlock notAText = raw.DataBlock(new byte[8]);
         var links = new object?[4 + references];
         for (int i = 0; i < references; i++)
         {
-            links[4 + i] = raw.Text("t" + i);
+            links[4 + i] = notAText;
         }
 
         PendingBlock conversion = raw.Block("##CC", links, data);
@@ -360,6 +375,65 @@ public class RobustnessTests
 
         Action open = () => MdfTestFile.Open(bytes).Dispose();
         open.Should().Throw<Mdf4FormatException>().WithMessage($"*{type} conversion cannot have*");
+    }
+
+    [Theory]
+    [InlineData(Mdf4ConversionType.TextToValue, 1, 2, 0)]
+    [InlineData(Mdf4ConversionType.TextToText, 3, 0, 1)]
+    [InlineData(Mdf4ConversionType.Algebraic, 1, 0, 0)]
+    public void A_Text_Input_Or_Formula_Conversion_Referring_To_A_Conversion_Is_A_Format_Error(Mdf4ConversionType type, int references, int values, int conversionAt)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + (values * 8)];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)references);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)values);
+        var links = new object?[4 + references];
+        for (int i = 0; i < references; i++)
+        {
+            links[4 + i] = i == conversionAt ? raw.Linear(1, 0) : raw.Text("t" + i);
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.StringLatin1, 0, 8, conversion: conversion);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0x41 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage($"*{type} conversion cannot refer to a conversion*");
+    }
+
+    [Fact]
+    public void A_Group_Of_Virtual_Channels_Yields_Its_Declared_Records()
+    {
+        byte[] bytes = VirtualGroup(cycles: 4);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4ChannelGroup group = file.ChannelGroups.Single();
+        group.ReadTimestamps().Should().Equal(0.0, 0.5, 1.0, 1.5);
+        file.FindChannel("index")!.ReadValues().Should().Equal(1.0, 3.0, 5.0, 7.0);
+    }
+
+    [Theory]
+    [InlineData(1001UL, 1000L)]
+    [InlineData(ulong.MaxValue, 16L * 1024 * 1024)]
+    public void A_Virtual_Group_Declaring_More_Records_Than_Allowed_Is_A_Format_Error(ulong cycles, long allowed)
+    {
+        // No record bytes are stored, so the cycle count alone would decide what is produced.
+        byte[] bytes = VirtualGroup(cycles);
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxVirtualRecordCount = allowed });
+        Action read = () => file.ChannelGroups.Single().ReadTimestamps();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*MaxVirtualRecordCount*");
+    }
+
+    private static byte[] VirtualGroup(ulong cycles)
+    {
+        var raw = new RawMdf();
+        PendingBlock index = raw.Channel("index", Mdf4ChannelType.VirtualData, Mdf4DataType.UnsignedIntegerLe, 0, 0, conversion: raw.Linear(2, 1));
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.VirtualMaster, Mdf4DataType.UnsignedIntegerLe, 0, 0, next: index, sync: Mdf4SyncType.Time, conversion: raw.Linear(0.5, 0));
+        PendingBlock cg = raw.ChannelGroup(0, cycles, 0, 0, time);
+        return raw.Build(raw.DataGroup(0, cg, null));
     }
 
     [Theory]

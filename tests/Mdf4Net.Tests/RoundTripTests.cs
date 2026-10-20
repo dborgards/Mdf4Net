@@ -598,6 +598,19 @@ public class RoundTripTests
     }
 
     [Theory]
+    [InlineData(14)]
+    [InlineData(-14)]
+    public void Start_Times_At_The_Extreme_Time_Zone_Offsets_Keep_Their_Offset(int hours)
+    {
+        var time = new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.FromHours(hours));
+        byte[] bytes = MdfTestFile.Write(_ => { }, new Mdf4WriterOptions { StartTime = time });
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.StartTime.Should().Be(time);
+        file.StartTime.Offset.Should().Be(time.Offset);
+    }
+
+    [Theory]
     [InlineData("1969-12-31T23:59:59+00:00")]
     [InlineData("2554-07-21T23:34:33.7095517+00:00")]
     [InlineData("2600-01-01T00:00:00+00:00")]
@@ -614,6 +627,10 @@ public class RoundTripTests
     [InlineData((byte)0x02, (short)60, 60, "2026-10-20T12:00:00+02:00")]
     [InlineData((byte)0x03, (short)120, 0, "2026-10-20T10:00:00+02:00")]
     [InlineData((byte)0x01, (short)0, 0, "2026-10-20T10:00:00+00:00")]
+    [InlineData((byte)0x02, (short)840, 0, "2026-10-21T00:00:00+14:00")]
+    [InlineData((byte)0x02, (short)-840, 0, "2026-10-19T20:00:00-14:00")]
+    [InlineData((byte)0x02, (short)780, 60, "2026-10-21T00:00:00+14:00")]
+    [InlineData((byte)0x02, (short)841, 0, "2026-10-20T10:00:00+00:00")]
     public void Header_Time_Flags_Decide_How_The_Time_Stamp_Is_Read(byte flags, short timeZoneMinutes, short dstMinutes, string expected)
     {
         // The HD block starts at 64; its data (after 24 header bytes and six links) at 136:

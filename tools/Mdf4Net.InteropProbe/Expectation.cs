@@ -112,7 +112,7 @@ internal sealed class Expectation
             using Mdf4File file = Mdf4File.Open(path);
             // asammdf computes the stored nanoseconds through a double (2,048 ns resolution near the
             // year 2500), so its files hold a start time to within a few microseconds.
-            if (Start is DateTimeOffset start && Math.Abs((file.StartTime - start).Ticks) > 40)
+            if (Start is DateTimeOffset start && (Math.Abs((file.StartTime - start).Ticks) > 40 || file.StartTime.Offset != start.Offset))
             {
                 problems.Add($"start time {file.StartTime:O}, expected {start:O}");
             }

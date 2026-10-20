@@ -138,7 +138,7 @@ behaviour of open implementations; it contains no code from them.
 
 Every length and count in an MDF file is attacker-controlled when the file comes from elsewhere.
 `Mdf4ReaderOptions` bounds what a reader allocates (metadata block size, decompressed block size,
-record size, signal data per channel, nesting depth); block chains are checked for cycles; MD
+record size, signal data per file, records of groups without stored data, nesting depth); block chains are checked for cycles; MD
 blocks are parsed with DTD processing disabled. See [SECURITY.md](SECURITY.md) for the threat model
 and how to report a problem.
 

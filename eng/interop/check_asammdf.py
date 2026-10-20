@@ -8,7 +8,8 @@
    frame) is compared with the JSON.
 2. asammdf -> Mdf4Net: this script writes files with asammdf (data types, conversions, strings,
    several groups, compression, MDF 4.20) plus a .json each, and the probe's `verify` command
-   reads them with Mdf4Net and compares.
+   reads them with Mdf4Net and compares. One file (raw_virtual_group) holds a construct neither
+   writer produces; it is laid out by hand and checked against asammdf's reading of it.
 
 asammdf is the most widely used open MDF implementation and is independent of this code base, so
 agreement in both directions is the strongest conformance evidence available without the ASAM
@@ -23,7 +24,8 @@ import math
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+import struct
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -85,7 +87,8 @@ def check_with_asammdf(mf4: Path, expected: dict) -> list:
         if expected.get('start'):
             wanted = datetime.fromisoformat(expected['start'])
             # asammdf converts the nanoseconds through a double: a few microseconds near 2500.
-            if abs(mdf.header.start_time.timestamp() - wanted.timestamp()) > 4e-6:
+            actual = mdf.header.start_time
+            if abs(actual.timestamp() - wanted.timestamp()) > 4e-6 or actual.utcoffset() != wanted.utcoffset():
                 problems.append(f'start time {mdf.header.start_time.isoformat()}, expected {wanted.isoformat()}')
         for channel in expected['channels']:
             label = f"{channel['group']}/{channel['name']}"
@@ -275,21 +278,24 @@ def write_asammdf_files(directory: Path, count: int = 2500) -> None:
     t = np.arange(count, dtype=np.float64) * 0.01
     fixed = np.array([f'fix{n % 50}'.encode() for n in range(count)], dtype='S8')
     variable = [('var ' + 'y' * (n % 23) + f' {n}').encode('utf-8') for n in range(count)]
+    # -14:00, the most negative time zone offset there is.
+    strings_start = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone(timedelta(hours=-14)))
     mdf = MDF(version='4.10')
+    mdf.header.start_time = strings_start
     mdf.append([
         Signal(samples=fixed, timestamps=t, name='s_fixed', encoding='latin-1'),
         Signal(samples=np.array(variable), timestamps=t, name='s_variable', encoding='utf-8'),
     ])
     mdf.save(directory / 'asammdf_strings.mf4', overwrite=True, compression=2)
     mdf.close()
-    (directory / 'asammdf_strings.json').write_text(json.dumps({'channels': [
+    (directory / 'asammdf_strings.json').write_text(json.dumps({'start': strings_start.isoformat(), 'channels': [
         expectation(0, 's_fixed', t, [v.decode() for v in fixed]),
         expectation(0, 's_variable', t, [v.decode() for v in variable]),
     ]}))
 
     # Several groups at different rates, starting in the year 2500 (beyond a signed 64-bit
-    # nanosecond count, inside MDF's unsigned one).
-    start = datetime(2500, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    # nanosecond count, inside MDF's unsigned one), at +14:00, the largest time zone offset.
+    start = datetime(2500, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=14)))
     mdf = MDF(version='4.10')
     mdf.header.start_time = start
     t_fast = np.arange(1000) * 0.001
@@ -301,6 +307,70 @@ def write_asammdf_files(directory: Path, count: int = 2500) -> None:
     (directory / 'asammdf_multigroup.json').write_text(json.dumps({'start': start.isoformat(), 'channels': [
         expectation(0, 'm_fast', t_fast, np.arange(1000) * 0.1),
         expectation(1, 'm_slow', t_slow, np.arange(20) * -3.0),
+    ]}))
+
+    write_virtual_group(directory, cycles=4)
+
+
+def write_virtual_group(directory: Path, cycles: int) -> None:
+    """A finalized file whose only channel group stores no record bytes: a virtual time master
+    (index * 0.5 s) and a virtual data channel (index * 2 + 1). The cycle count alone gives the
+    number of samples. Neither writer produces such a group through its public API, so the blocks
+    are laid out here by hand; asammdf's reading of the master is the cross-check."""
+    blocks = []  # (name, block id, links as block names or 0, data)
+
+    def block(name, block_id, links, data):
+        blocks.append((name, block_id, links, data))
+
+    def text(name, value):
+        raw = value.encode() + b'\0'
+        block(name, b'##TX', [], raw + b'\0' * (-len(raw) % 8))
+
+    def linear(name, factor, offset):
+        # cc_type, precision, flags, ref count, value count, physical range, then b and a.
+        block(name, b'##CC', [0, 0, 0, 0], struct.pack('<BBHHHdddd', 1, 0, 0, 0, 2, 0, 0, offset, factor))
+
+    def channel(name, next_channel, label, channel_type, sync_type, conversion):
+        # cn_type, sync type, data type (unsigned LE), bit offset, byte offset, bit count, flags,
+        # invalidation bit, precision, reserved, attachment count, then six range doubles.
+        data = struct.pack('<BBBBIIIIBBH', channel_type, sync_type, 0, 0, 0, 0, 0, 0, 0, 0, 0) + bytes(48)
+        block(name, b'##CN', [next_channel, 0, label, 0, conversion, 0, 0, 0], data)
+
+    block('hd', b'##HD', ['dg', 0, 0, 0, 0, 0], bytes(32))
+    block('dg', b'##DG', [0, 'cg', 0, 0], bytes(8))
+    # record id, cycle count, flags, path separator, reserved, data bytes, invalidation bytes.
+    block('cg', b'##CG', [0, 'cn_time', 0, 0, 0, 0], struct.pack('<QQHHIII', 0, cycles, 0, 0, 0, 0, 0))
+    channel('cn_time', 'cn_index', 'tx_time', 3, 1, 'cc_time')  # virtual master, time
+    channel('cn_index', 0, 'tx_index', 6, 0, 'cc_index')  # virtual data
+    text('tx_time', 'v_time')
+    text('tx_index', 'v_index')
+    linear('cc_time', 0.5, 0.0)
+    linear('cc_index', 2.0, 1.0)
+
+    offsets, position = {}, 64
+    for name, _, links, data in blocks:
+        offsets[name] = position
+        position += 24 + 8 * len(links) + len(data)
+    out = bytearray(b'MDF     4.10    rawbytes' + bytes(4) + struct.pack('<H', 410) + bytes(34))
+    for _, block_id, links, data in blocks:
+        out += block_id + bytes(4) + struct.pack('<QQ', 24 + 8 * len(links) + len(data), len(links))
+        out += struct.pack(f'<{len(links)}Q', *[offsets[link] if link else 0 for link in links]) + data
+    mf4 = directory / 'raw_virtual_group.mf4'
+    mf4.write_bytes(bytes(out))
+
+    index = np.arange(cycles, dtype=np.float64)
+    mdf = MDF(str(mf4))
+    try:
+        # asammdf 8.8.27 reads the master of such a group, but not its channels (it divides by the
+        # record size); the channel values follow the format.
+        master = mdf.get_master(0)
+    finally:
+        mdf.close()
+    if list(master) != list(index * 0.5):
+        raise SystemExit(f'asammdf reads the virtual master as {list(master)}, expected {list(index * 0.5)}')
+    (directory / 'raw_virtual_group.json').write_text(json.dumps({'channels': [
+        expectation(0, 'v_time', index * 0.5, index * 0.5),
+        expectation(0, 'v_index', index * 0.5, index * 2 + 1),
     ]}))
 
 

@@ -171,8 +171,22 @@ public sealed class Mdf4DataGroup
         if (RecordIdSize == 0 && target.RecordSize == 0 && !target.IsVariableLengthSignalData)
         {
             // Only virtual channels: no record bytes are stored, and the cycle count of a
-            // finalized group says how many records there are. An unfinalized file has no
-            // reliable count, and no data to count either.
+            // finalized group says how many records there are. A stored channel without bytes is
+            // a broken layout, not a source of samples. An unfinalized file has no reliable
+            // count, and no data to count either.
+            if (target.AllChannels.Count == 0)
+            {
+                yield break;
+            }
+
+            foreach (Mdf4Channel channel in target.AllChannels)
+            {
+                if (channel.ChannelType is not (Mdf4ChannelType.VirtualMaster or Mdf4ChannelType.VirtualData))
+                {
+                    throw Mdf4FormatException.At(channel.Offset, $"Channel '{channel.Name}' is stored in a channel group whose records hold no bytes");
+                }
+            }
+
             if (!File.IsFinalized)
             {
                 yield break;

@@ -427,6 +427,47 @@ public class RobustnessTests
         read.Should().Throw<Mdf4FormatException>().WithMessage("*MaxVirtualRecordCount*");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_Stored_Channel_In_A_Group_Without_Record_Bytes_Is_A_Format_Error(bool withVirtualMaster)
+    {
+        // A fixed-length channel of zero bits: no record bytes, and nothing it could be read from.
+        var raw = new RawMdf();
+        PendingBlock stored = raw.Channel("s", Mdf4ChannelType.FixedLength, Mdf4DataType.StringUtf8, 0, 0);
+        PendingBlock first = withVirtualMaster
+            ? raw.Channel("t", Mdf4ChannelType.VirtualMaster, Mdf4DataType.UnsignedIntegerLe, 0, 0, next: stored, sync: Mdf4SyncType.Time)
+            : stored;
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 2, 0, 0, first), null));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("s")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*records hold no bytes*");
+    }
+
+    [Theory]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxMetadataBlockSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxDecompressedBlockSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxSignalDataSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxRecordSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxVirtualRecordCount))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxNestingDepth))]
+    public void A_Negative_Reader_Limit_Is_Refused_Instead_Of_Disabling_It(string limit)
+    {
+        Mdf4ReaderOptions options = limit switch
+        {
+            nameof(Mdf4ReaderOptions.MaxMetadataBlockSize) => new() { MaxMetadataBlockSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxDecompressedBlockSize) => new() { MaxDecompressedBlockSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxSignalDataSize) => new() { MaxSignalDataSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxRecordSize) => new() { MaxRecordSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxVirtualRecordCount) => new() { MaxVirtualRecordCount = -1 },
+            _ => new() { MaxNestingDepth = -1 },
+        };
+
+        Action open = () => MdfTestFile.Open(VirtualGroup(cycles: 3), options).Dispose();
+        open.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(limit);
+    }
+
     private static byte[] VirtualGroup(ulong cycles)
     {
         var raw = new RawMdf();

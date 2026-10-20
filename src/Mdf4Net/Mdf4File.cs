@@ -108,7 +108,9 @@ public sealed class Mdf4File : IDisposable
             throw new ArgumentException("The stream must be readable and seekable.", nameof(stream));
         }
 
-        var file = new Mdf4File(stream, leaveOpen, options ?? Mdf4ReaderOptions.Default);
+        options ??= Mdf4ReaderOptions.Default;
+        options.Validate();
+        var file = new Mdf4File(stream, leaveOpen, options);
         file.Load();
         return file;
     }

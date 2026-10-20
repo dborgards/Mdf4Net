@@ -62,7 +62,7 @@ public sealed class Mdf4ConversionDefinition
 
         for (int i = 1; i < entries.Length; i++)
         {
-            if (entries[i].Key == entries[i - 1].Key)
+            if (entries[i].Key.CompareTo(entries[i - 1].Key) == 0)
             {
                 throw new ArgumentException($"The table has the key {entries[i].Key} twice.", nameof(table));
             }

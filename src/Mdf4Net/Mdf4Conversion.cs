@@ -220,7 +220,7 @@ public sealed class Mdf4Conversion
         {
             for (int i = 2; i < valCount; i += 2)
             {
-                if (!(values[i] > values[i - 2]))
+                if (values[i].CompareTo(values[i - 2]) <= 0)
                 {
                     throw Mdf4FormatException.At(link, $"The keys of a {type} conversion are not strictly increasing");
                 }

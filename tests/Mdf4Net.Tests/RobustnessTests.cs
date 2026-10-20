@@ -522,6 +522,60 @@ public class RobustnessTests
         ((Action)(() => canGroupRead.ReadCanDataFrames().ToList())).Should().Throw<Mdf4FormatException>().WithMessage("*does not yield numbers*");
     }
 
+    [Theory]
+    [InlineData("DataBytes", Mdf4DataType.StringUtf8)]
+    [InlineData("ID", Mdf4DataType.FloatLe)]
+    public void A_Can_Data_Frame_Group_With_The_Wrong_Field_Types_Is_A_Format_Error(string field, Mdf4DataType dataType)
+    {
+        // t u8 @0, CAN_DataFrame @1: ID @1 (32 bits), DataBytes @5 (3 bytes) = 01 02 03.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, field == "DataBytes" ? dataType : Mdf4DataType.ByteArray, 5, 24, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, field == "ID" ? dataType : Mdf4DataType.UnsignedIntegerLe, 1, 32, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 56, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0x23, 0x01, 0, 0, 1, 2, 3 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.ChannelGroups.Single().IsCanDataFrameGroup().Should().BeTrue();
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*'CAN_DataFrame.{field}' holds {dataType} values*");
+    }
+
+    [Fact]
+    public void An_Invalidation_Bit_Without_Invalidation_Bytes_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, flags: Mdf4ChannelFlags.InvalidationBitValid);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 7 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*no invalidation bytes*");
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("float")]
+    [InlineData("itself")]
+    public void A_Maximum_Length_Channel_Without_An_Integer_Size_Channel_Is_A_Format_Error(string target)
+    {
+        // frame: 4 bytes @0, size f32 @4 (for the float case).
+        var raw = new RawMdf();
+        PendingBlock size = raw.Channel("size", Mdf4ChannelType.FixedLength, Mdf4DataType.FloatLe, 4, 32);
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32, next: size);
+        frame.Links[5] = target switch
+        {
+            "text" => raw.Text("not a channel"),
+            "float" => size,
+            _ => frame,
+        };
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 8, 0, frame), raw.DataBlock(new byte[8])));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*does not refer to an integer size channel*");
+    }
+
     [Fact]
     public void A_Conversion_That_Refers_To_Itself_Is_Detected()
     {

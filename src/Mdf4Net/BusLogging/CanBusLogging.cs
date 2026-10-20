@@ -211,6 +211,20 @@ internal static class CanDataFrameReader
 
         master?.EnsureUsableAsMaster();
 
+        // The ASAM bus logging layout: the payload is a byte array, the frame fields are integers.
+        // A group that only has the names right is a format error, not a source of empty frames.
+        if (bytes.DataType != Mdf4DataType.ByteArray)
+        {
+            throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' holds {bytes.DataType} values, not bytes");
+        }
+
+        foreach (Mdf4Channel? field in new[] { id, ide, dlc, length, bus, dir, edl, brs, esi })
+        {
+            if (field is { IsInteger: false })
+            {
+                throw Mdf4FormatException.At(field.Offset, $"CAN frame field '{field.Name}' holds {field.DataType} values, not integers");
+            }
+        }
 
         long index = 0;
         foreach (ArraySegment<byte> segment in group.DataGroup.EnumerateRecords(group))
@@ -264,7 +278,7 @@ internal static class CanDataFrameReader
     }
 
     private static bool Flag(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
-        => channel.IsNumeric && Math.Abs(channel.DecodeRawNumber(record, index)) > 0;
+        => channel.DecodeRawNumber(record, index) != 0;
 
     private static double Physical(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
     {

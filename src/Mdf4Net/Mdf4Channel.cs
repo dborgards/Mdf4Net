@@ -230,9 +230,16 @@ public sealed class Mdf4Channel
             return true;
         }
 
-        if ((Flags & Mdf4ChannelFlags.InvalidationBitValid) == 0 || ChannelGroup.InvalidationBytes == 0)
+        if ((Flags & Mdf4ChannelFlags.InvalidationBitValid) == 0)
         {
             return false;
+        }
+
+        if (ChannelGroup.InvalidationBytes == 0)
+        {
+            // The channel says its validity is in an invalidation bit the group does not have:
+            // reading every value as valid would hide that the layout is broken.
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has an invalidation bit, but its channel group has no invalidation bytes");
         }
 
         long byteIndex = ChannelGroup.DataBytes + (InvalidationBitPosition >> 3);
@@ -360,7 +367,13 @@ public sealed class Mdf4Channel
         }
         else if (ChannelType == Mdf4ChannelType.MaximumLength)
         {
+            // The size of a maximum-length value is held by another integer channel of the same
+            // record; a link that resolves to anything else must not read as "no size limit".
             _lengthChannel = ChannelGroup.ChannelAt(_dataLink);
+            if (_lengthChannel is null || ReferenceEquals(_lengthChannel, this) || !_lengthChannel.IsInteger)
+            {
+                throw Mdf4FormatException.At(Offset, $"Maximum-length channel '{Name}' does not refer to an integer size channel of its channel group");
+            }
         }
     }
 

@@ -44,21 +44,24 @@ internal sealed class MetadataBuilder
         return block;
     }
 
-    /// <summary>A TX block; identical texts share one block.</summary>
-    public PendingBlock? Text(string? text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return null;
-        }
+    /// <summary>A TX block for optional metadata; null and empty both mean "no text" (no link).</summary>
+    public PendingBlock? Text(string? text) => string.IsNullOrEmpty(text) ? null : Value(text!);
 
-        if (_texts.TryGetValue(text!, out PendingBlock? existing))
+    /// <summary>
+    /// A TX block for a conversion result, where an empty text is a value: only null means "no
+    /// text" (which a reader turns into the raw value). Identical texts share one block.
+    /// </summary>
+    public PendingBlock? ConversionText(string? text) => text is null ? null : Value(text);
+
+    private PendingBlock Value(string text)
+    {
+        if (_texts.TryGetValue(text, out PendingBlock? existing))
         {
             return existing;
         }
 
-        PendingBlock block = Add("##TX", Array.Empty<object?>(), ZeroTerminated(text!));
-        _texts[text!] = block;
+        PendingBlock block = Add("##TX", Array.Empty<object?>(), ZeroTerminated(text));
+        _texts[text] = block;
         return block;
     }
 

@@ -112,6 +112,58 @@ public class RobustnessTests
     }
 
     [Fact]
+    public void Shared_Conversion_References_Are_Parsed_Once()
+    {
+        // Twenty value-to-text levels, each referring twice to the same next level: expanded per
+        // reference that is 2^20 parses from a file of a few kilobytes.
+        const int Levels = 20;
+        var raw = new RawMdf();
+        PendingBlock next = raw.Linear(2, 0);
+        for (int level = 0; level < Levels; level++)
+        {
+            var data = new byte[24 + 8];
+            data[0] = (byte)Mdf4ConversionType.ValueToText;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+            next = raw.Block("##CC", new object?[] { null, null, null, null, next, next }, data);
+        }
+
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: next);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4Conversion? conversion = file.FindChannel("v")!.Conversion;
+        for (int level = 0; level < Levels; level++)
+        {
+            conversion!.References.Should().HaveCount(2);
+            conversion.References[0].Should().BeSameAs(conversion.References[1], $"level {level} refers twice to one block");
+            conversion = conversion.References[0] as Mdf4Conversion;
+        }
+
+        conversion!.Type.Should().Be(Mdf4ConversionType.Linear);
+        file.FindChannel("v")!.ReadValues().Should().Equal(0.0);
+    }
+
+    [Fact]
+    public void A_Conversion_That_Refers_To_Itself_Is_Detected()
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 8];
+        data[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+        PendingBlock loop = raw.Block("##CC", new object?[6], data);
+        loop.Links[4] = loop;
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: loop);
+        PendingBlock cg = raw.ChannelGroup(0, 0, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, null));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*refers back to itself*");
+    }
+
+    [Fact]
     public void A_Decompression_Bomb_Is_Refused_Before_Inflating()
     {
         var fields = new byte[24 + 16];

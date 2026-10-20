@@ -40,13 +40,20 @@ public sealed class Mdf4SourceInformation
             return null;
         }
 
+        if (reader.Sources.TryGetValue(link, out Mdf4SourceInformation? cached))
+        {
+            return cached;
+        }
+
         RawBlock block = reader.ReadBlock(link, "##SI");
-        return new Mdf4SourceInformation(
+        var source = new Mdf4SourceInformation(
             TextBlocks.ReadText(reader, block.Link(0)),
             TextBlocks.ReadText(reader, block.Link(1)),
             TextBlocks.ReadText(reader, block.Link(2)),
             (Mdf4SourceType)block.U8(0),
             (Mdf4BusType)block.U8(1),
             (block.U8(2) & 0x01) != 0);
+        reader.Sources[link] = source;
+        return source;
     }
 }

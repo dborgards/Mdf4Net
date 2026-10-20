@@ -426,7 +426,12 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
         links[2] = meta.Text(conversion.Comment);
         for (int i = 0; i < conversion.Texts.Length; i++)
         {
-            links[4 + i] = meta.Text(conversion.Texts[i]);
+            links[4 + i] = meta.ConversionText(conversion.Texts[i]);
+        }
+
+        if (conversion.Values.Length > ushort.MaxValue || conversion.Texts.Length > ushort.MaxValue)
+        {
+            throw new InvalidOperationException("A conversion has more values or texts than cc_val_count / cc_ref_count can hold.");
         }
 
         var data = new byte[24 + (conversion.Values.Length * 8)];

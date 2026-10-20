@@ -151,11 +151,35 @@ public sealed class Mdf4Conversion
             return null;
         }
 
+        if (reader.Conversions.TryGetValue(link, out Mdf4Conversion? cached))
+        {
+            return cached;
+        }
+
         if (depth > reader.Options.MaxNestingDepth)
         {
             throw Mdf4FormatException.At(link, "Conversions are nested deeper than MaxNestingDepth");
         }
 
+        if (!reader.ActiveConversions.Add(link))
+        {
+            throw Mdf4FormatException.At(link, "A conversion refers back to itself");
+        }
+
+        try
+        {
+            Mdf4Conversion conversion = Parse(reader, link, depth);
+            reader.Conversions[link] = conversion;
+            return conversion;
+        }
+        finally
+        {
+            reader.ActiveConversions.Remove(link);
+        }
+    }
+
+    private static Mdf4Conversion Parse(BlockReader reader, long link, int depth)
+    {
         RawBlock block = reader.ReadBlock(link, "##CC");
         var type = (Mdf4ConversionType)block.U8(0);
         ushort refCount = block.U16(4);

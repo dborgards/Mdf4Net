@@ -276,6 +276,57 @@ public class RoundTripTests
     }
 
     [Fact]
+    public void Empty_Conversion_Texts_Are_Texts_Not_Missing_Entries()
+    {
+        byte[] bytes = MdfTestFile.Write(writer =>
+        {
+            var definition = new Mdf4ChannelGroupDefinition("G");
+            Mdf4ChannelDefinition value = definition.Add(new Mdf4ChannelDefinition("value", Mdf4DataType.UnsignedIntegerLe, 8)
+            {
+                Conversion = Mdf4ConversionDefinition.ValueToText(new Dictionary<double, string> { [0] = string.Empty }, string.Empty),
+            });
+            Mdf4ChannelDefinition range = definition.Add(new Mdf4ChannelDefinition("range", Mdf4DataType.UnsignedIntegerLe, 8)
+            {
+                Conversion = Mdf4ConversionDefinition.RangeToText(new[] { (0.0, 0.0, string.Empty) }, string.Empty),
+            });
+            Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
+            group.BeginRecord().Set(value, 0L).Set(range, 0L).Commit();
+            group.BeginRecord().Set(value, 1L).Set(range, 1L).Commit();
+        });
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.FindChannel("value")!.ReadValues().Should().Equal(string.Empty, string.Empty);
+        file.FindChannel("range")!.ReadValues().Should().Equal(string.Empty, string.Empty);
+    }
+
+    [Fact]
+    public void Conversion_Tables_Are_Limited_To_What_The_Count_Fields_Hold()
+    {
+        // cc_val_count is 16 bits: 32,767 pairs (65,534 values) fit, 32,768 pairs do not.
+        var largest = Enumerable.Range(0, 32767).ToDictionary(i => (double)i, i => 2.0 * i);
+        byte[] bytes = MdfTestFile.Write(writer =>
+        {
+            var definition = new Mdf4ChannelGroupDefinition("G");
+            Mdf4ChannelDefinition value = definition.Add(new Mdf4ChannelDefinition("value", Mdf4DataType.UnsignedIntegerLe, 16)
+            {
+                Conversion = Mdf4ConversionDefinition.ValueToValue(largest, interpolate: false),
+            });
+            writer.AddChannelGroup(definition).BeginRecord().Set(value, 1L).Commit();
+        });
+
+        using (Mdf4File file = MdfTestFile.Open(bytes))
+        {
+            file.FindChannel("value")!.Conversion!.Values.Should().HaveCount(65534);
+            file.FindChannel("value")!.ReadDoubles().Should().Equal(2.0);
+        }
+
+        var tooMany = Enumerable.Range(0, 32768).ToDictionary(i => (double)i, i => (double)i);
+        ((Action)(() => Mdf4ConversionDefinition.ValueToValue(tooMany, interpolate: true))).Should().Throw<ArgumentException>().WithMessage("*65535*");
+        var tooManyTexts = Enumerable.Range(0, 65535).ToDictionary(i => (double)i, i => "t");
+        ((Action)(() => Mdf4ConversionDefinition.ValueToText(tooManyTexts))).Should().Throw<ArgumentException>().WithMessage("*65535*");
+    }
+
+    [Fact]
     public void Structures_Are_Read_As_Compositions()
     {
         Mdf4ChannelDefinition a = Mdf4ChannelDefinition.UInt8("S.a");

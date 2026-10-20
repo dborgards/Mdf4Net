@@ -99,6 +99,18 @@ internal sealed class BlockReader
 
     public long FileLength { get; }
 
+    // Blocks that may be referenced many times (texts, sources, conversions) are parsed once per
+    // file. Without this, a file whose blocks link to shared successors makes the parse
+    // exponential in its depth while the file itself stays small.
+    public Dictionary<long, TextContent> Texts { get; } = new();
+
+    public Dictionary<long, Mdf4SourceInformation> Sources { get; } = new();
+
+    public Dictionary<long, Mdf4Conversion> Conversions { get; } = new();
+
+    /// <summary>Conversions being parsed right now, to detect a reference cycle.</summary>
+    public HashSet<long> ActiveConversions { get; } = new();
+
     public BlockHeader ReadHeader(long offset)
     {
         if (offset < IdentificationSize || offset > FileLength - HeaderSize)

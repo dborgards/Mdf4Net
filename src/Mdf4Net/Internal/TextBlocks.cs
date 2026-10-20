@@ -49,17 +49,21 @@ internal static class TextBlocks
             return TextContent.Empty;
         }
 
+        if (reader.Texts.TryGetValue(link, out TextContent? cached))
+        {
+            return cached;
+        }
+
         RawBlock block = reader.ReadBlock(link);
         string value = DecodeZeroTerminatedUtf8(block.Data);
-        switch (block.Id)
+        TextContent content = block.Id switch
         {
-            case "##TX":
-                return new TextContent(value, null, new Dictionary<string, string>(StringComparer.Ordinal));
-            case "##MD":
-                return ParseXml(value);
-            default:
-                throw Mdf4FormatException.At(link, $"Expected a TX or MD block, found {block.Id}");
-        }
+            "##TX" => new TextContent(value, null, new Dictionary<string, string>(StringComparer.Ordinal)),
+            "##MD" => ParseXml(value),
+            _ => throw Mdf4FormatException.At(link, $"Expected a TX or MD block, found {block.Id}"),
+        };
+        reader.Texts[link] = content;
+        return content;
     }
 
     public static string DecodeZeroTerminatedUtf8(byte[] data)

@@ -12,6 +12,13 @@ public sealed class Mdf4ConversionDefinition
 {
     private Mdf4ConversionDefinition(Mdf4ConversionType type, double[] values, string?[] texts)
     {
+        // cc_val_count and cc_ref_count are 16-bit fields.
+        if (values.Length > ushort.MaxValue || texts.Length > ushort.MaxValue)
+        {
+            throw new ArgumentException(
+                $"A {type} conversion stores {values.Length} values and {texts.Length} texts; MDF allows at most {ushort.MaxValue} of each, so the table is too large.");
+        }
+
         Type = type;
         Values = values;
         Texts = texts;

@@ -1,0 +1,3 @@
+# The reference reader/writer the interoperability check runs against (eng/interop/check_asammdf.py).
+# Pinned so that a new asammdf release cannot turn CI red on its own; Dependabot proposes bumps.
+asammdf==8.8.27

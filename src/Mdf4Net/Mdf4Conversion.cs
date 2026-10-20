@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Mdf4Net.Internal;
 
 namespace Mdf4Net;
@@ -15,14 +16,7 @@ public sealed class Mdf4Conversion
 
     private Mdf4Conversion(Mdf4ConversionType type, string? name, string? unit, string? comment, double[] values, object?[] references)
     {
-        Height = 1;
-        foreach (object? reference in references)
-        {
-            if (reference is Mdf4Conversion nested)
-            {
-                Height = Math.Max(Height, nested.Height + 1);
-            }
-        }
+        Height = 1 + references.OfType<Mdf4Conversion>().Select(nested => nested.Height).DefaultIfEmpty(0).Max();
 
         Type = type;
         Name = name;

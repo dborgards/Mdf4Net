@@ -67,13 +67,8 @@ public class CompressionTests
             }
 
             byte[] cut = round % 5 == 0 ? damaged.AsSpan(0, random.Next(damaged.Length)).ToArray() : damaged;
-            try
-            {
-                Zlib.Decompress(cut, data.Length, 0);
-            }
-            catch (Mdf4FormatException)
-            {
-            }
+            Exception? failure = Record.Exception(() => Zlib.Decompress(cut, data.Length, 0));
+            (failure is null or Mdf4FormatException).Should().BeTrue($"round {round} failed with {failure}");
         }
     }
 

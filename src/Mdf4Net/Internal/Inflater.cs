@@ -304,23 +304,30 @@ internal sealed class Inflater
                 _count[lengths[i]]++;
             }
 
-            left = 1;
-            if (_count[0] == count)
+            left = _count[0] == count ? 0 : CodeSpaceLeft();
+            if (left >= 0 && _count[0] != count)
             {
-                left = 0;
-                return;
+                AssignSymbols(lengths, count);
             }
+        }
 
+        private int CodeSpaceLeft()
+        {
+            int left = 1;
             for (int length = 1; length <= MaxBits; length++)
             {
-                left <<= 1;
-                left -= _count[length];
+                left = (left << 1) - _count[length];
                 if (left < 0)
                 {
-                    return;
+                    break;
                 }
             }
 
+            return left;
+        }
+
+        private void AssignSymbols(short[] lengths, int count)
+        {
             var offsets = new short[MaxBits + 1];
             for (int length = 1; length < MaxBits; length++)
             {

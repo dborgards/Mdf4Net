@@ -533,9 +533,9 @@ public class RoundTripTests
     private static void AssertListOffsetsMatchBlockLengths(Mdf4File file, string because)
     {
         Mdf4Net.Internal.BlockReader reader = file.Reader;
-        foreach (Mdf4DataGroup group in file.DataGroups)
+        foreach (long dataLink in file.DataGroups.Select(group => group.DataLink))
         {
-            long link = group.DataLink;
+            long link = dataLink;
             if (link == 0)
             {
                 continue;

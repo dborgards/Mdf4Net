@@ -693,6 +693,8 @@ public class RobustnessTests
     [InlineData(Mdf4DataType.UnsignedIntegerLe, 65u, 0u)]
     [InlineData(Mdf4DataType.FloatLe, 24u, 0u)]
     [InlineData(Mdf4DataType.UnsignedIntegerLe, 8u, 5u)]
+    [InlineData(Mdf4DataType.ByteArray, 0x80000000u, 0u)]
+    [InlineData(Mdf4DataType.StringUtf8, 0xFFFFFFF8u, 0u)]
     public void All_Values_Invalid_Does_Not_Excuse_A_Broken_Layout(Mdf4DataType dataType, uint bitCount, uint byteOffset)
     {
         // A one-byte record; the channel is flagged "all values invalid" and still broken.

@@ -544,10 +544,11 @@ public sealed class Mdf4Channel
             throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has {BitCount} bits, which is not a whole {DataType} field");
         }
 
-        RequireWithinDataBytes(BitField.ByteSpan(BitOffset, (int)BitCount));
+        // In 64-bit arithmetic: a bit count of 2^31 or more must not wrap to a negative span.
+        RequireWithinDataBytes(((long)BitOffset + BitCount + 7) / 8);
     }
 
-    private void RequireWithinDataBytes(int bytes)
+    private void RequireWithinDataBytes(long bytes)
     {
         if ((long)ByteOffset + bytes > ChannelGroup.DataBytes)
         {

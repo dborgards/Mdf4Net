@@ -12,13 +12,13 @@ internal static class Transposition
     public static byte[] Transpose(byte[] data, int offset, int length, int columns)
     {
         var result = new byte[length];
-        if (columns <= 1)
+        int rows = columns <= 1 ? 0 : length / columns;
+        if (rows == 0)
         {
             Buffer.BlockCopy(data, offset, result, 0, length);
             return result;
         }
 
-        int rows = length / columns;
         for (int r = 0; r < rows; r++)
         {
             int source = offset + (r * columns);
@@ -36,13 +36,15 @@ internal static class Transposition
     public static byte[] Untranspose(byte[] data, int columns)
     {
         int length = data.Length;
-        if (columns <= 1)
+        int rows = columns <= 1 ? 0 : length / columns;
+        if (rows == 0)
         {
+            // One column, or not even one complete row: nothing is transposed. Returning here also
+            // keeps a forged column count from driving the loop below.
             return data;
         }
 
         var result = new byte[length];
-        int rows = length / columns;
         for (int c = 0; c < columns; c++)
         {
             int source = c * rows;

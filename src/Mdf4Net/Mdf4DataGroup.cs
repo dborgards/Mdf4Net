@@ -143,6 +143,28 @@ public sealed class Mdf4DataGroup
         using var data = new ChunkStream(DataChain.Enumerate(File.Reader, DataLink, "##DT"));
         long limit = File.IsFinalized && !target.IsVariableLengthSignalData ? (long)Math.Min(target.CycleCount, long.MaxValue) : long.MaxValue;
         long yielded = 0;
+
+        // The data ended. For an unfinalized file that is how a recording stops; for a finalized
+        // one, a record cut off or fewer records than the group declares mean the file is broken,
+        // and returning what was read would pass off an incomplete measurement as complete.
+        void EndOfData(bool atRecordStart)
+        {
+            if (!File.IsFinalized)
+            {
+                return;
+            }
+
+            if (data.Truncated || !atRecordStart)
+            {
+                throw Mdf4FormatException.At(Offset, "The data of a finalized file ends in the middle of a record");
+            }
+
+            if (limit != long.MaxValue && yielded < limit)
+            {
+                throw Mdf4FormatException.At(target.Offset, $"Channel group declares {limit} records, the data holds {yielded}");
+            }
+        }
+
         var id = new byte[8];
         byte[] buffer = new byte[Math.Max(target.RecordSize, 4)];
 
@@ -153,6 +175,7 @@ public sealed class Mdf4DataGroup
             {
                 if (!data.TryRead(id, 0, RecordIdSize))
                 {
+                    EndOfData(atRecordStart: true);
                     yield break;
                 }
 
@@ -175,6 +198,7 @@ public sealed class Mdf4DataGroup
             {
                 if (!data.TryRead(id, 0, 4))
                 {
+                    EndOfData(atRecordStart: RecordIdSize == 0);
                     yield break;
                 }
 
@@ -183,6 +207,7 @@ public sealed class Mdf4DataGroup
                 {
                     if (!data.TrySkip(length))
                     {
+                        EndOfData(atRecordStart: false);
                         yield break;
                     }
 
@@ -196,6 +221,7 @@ public sealed class Mdf4DataGroup
 
                 if (!ReadGrowing(data, ref buffer, id, (int)length))
                 {
+                    EndOfData(atRecordStart: false);
                     yield break;
                 }
 
@@ -226,6 +252,7 @@ public sealed class Mdf4DataGroup
             {
                 if (!data.TrySkip(size))
                 {
+                    EndOfData(atRecordStart: RecordIdSize == 0);
                     yield break;
                 }
 
@@ -234,6 +261,7 @@ public sealed class Mdf4DataGroup
 
             if (!data.TryRead(buffer, 0, size))
             {
+                EndOfData(atRecordStart: RecordIdSize == 0);
                 yield break;
             }
 

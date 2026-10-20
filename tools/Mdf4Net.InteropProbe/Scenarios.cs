@@ -102,6 +102,10 @@ internal static class Scenarios
         {
             Conversion = Mdf4ConversionDefinition.ValueToText(new Dictionary<double, string> { [0] = "Off", [1] = "Idle", [2] = "Run" }, "Unknown"),
         });
+        Mdf4ChannelDefinition floatTable = definition.Add(new Mdf4ChannelDefinition("f64_table", Mdf4DataType.FloatLe, 64)
+        {
+            Conversion = Mdf4ConversionDefinition.ValueToValue(new Dictionary<double, double> { [0] = 0, [1] = 10 }, interpolate: true),
+        });
         Mdf4ChannelDefinition label = definition.Add(Mdf4ChannelDefinition.String("label", 12));
         Mdf4ChannelDefinition raw = definition.Add(Mdf4ChannelDefinition.Bytes("raw", 4));
 
@@ -121,6 +125,7 @@ internal static class Scenarios
             long i16Raw = (i * 11L) - 16000;
             long i32Raw = i * -70001L;
             float f32Raw = i * 0.5f;
+            double tableRawFloat = i % 10 == 0 ? double.NaN : (i % 7) * 0.25;
 
             group.BeginRecord(time)
                 .Set(u8, (ulong)(i % 256))
@@ -139,6 +144,7 @@ internal static class Scenarios
                 .Set(rational, (ulong)rationalRaw)
                 .Set(table, (ulong)tableRaw)
                 .Set(state, (ulong)stateRaw)
+                .Set(floatTable, tableRawFloat)
                 .Set(label, text)
                 .Set(raw, bytes)
                 .Commit();
@@ -159,6 +165,7 @@ internal static class Scenarios
             recorder.Add("f64_be", i * 1.5);
             recorder.Add("u16_rational", ((2.0 * rationalRaw) + 1) / 4);
             recorder.Add("u8_table", tableRaw <= 100 ? tableRaw * 0.5 : Math.Min(400, 50 + ((tableRaw - 100) * 3.5)));
+            recorder.Add("f64_table", double.IsNaN(tableRawFloat) ? double.NaN : Math.Min(10, tableRawFloat * 10));
             recorder.Add("state", stateRaw switch { 0 => "Off", 1 => "Idle", 2 => "Run", _ => "Unknown" });
             recorder.Add("label", text);
             recorder.Add("raw", bytes);

@@ -198,6 +198,7 @@ internal sealed class Expectation
     {
         null => null,
         JsonObject o when o["hex"] is not null => Convert.FromHexString(o["hex"]!.GetValue<string>()),
+        JsonObject o when o["float"] is not null => double.Parse(o["float"]!.GetValue<string>(), CultureInfo.InvariantCulture),
         JsonValue v when v.TryGetValue(out string? s) => s,
         JsonValue v => v.GetValue<double>(),
         _ => throw new FormatException($"Unexpected JSON value {node.ToJsonString()}"),
@@ -208,6 +209,8 @@ internal sealed class Expectation
         null => null,
         byte[] bytes => new JsonObject { ["hex"] = Convert.ToHexString(bytes) },
         string s => JsonValue.Create(s),
+        // JSON has no NaN or infinity; they travel as {"float": "NaN"}.
+        double d when double.IsNaN(d) || double.IsInfinity(d) => new JsonObject { ["float"] = d.ToString(CultureInfo.InvariantCulture) },
         double d => JsonValue.Create(d),
         _ => throw new FormatException($"Unexpected value type {value.GetType()}"),
     };

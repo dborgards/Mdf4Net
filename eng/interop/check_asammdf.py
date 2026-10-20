@@ -59,6 +59,10 @@ def as_python(sample):
 
 
 def same(actual, expected) -> bool:
+    if isinstance(expected, dict) and 'float' in expected:
+        # JSON has no NaN or infinity; they travel as {"float": "NaN"}.
+        wanted = float(expected['float'])
+        return isinstance(actual, (int, float)) and (math.isnan(wanted) and math.isnan(actual) or actual == wanted)
     if isinstance(expected, dict):
         wanted = bytes.fromhex(expected['hex'])
         # asammdf returns variable-length byte arrays as one 2-D array, zero-padded to the
@@ -185,6 +189,8 @@ def expectation(group: int, name: str, timestamps, values, unit=None) -> dict:
             return {'hex': bytes(value).hex()}
         if isinstance(value, str):
             return value
+        if math.isnan(value) or math.isinf(value):
+            return {'float': repr(float(value)).replace('nan', 'NaN').replace('inf', 'Infinity')}
         return float(value)
     return {
         'group': group,
@@ -223,6 +229,21 @@ def numeric_signals(count: int):
         'val_0': 0, 'text_0': b'Off', 'val_1': 1, 'text_1': b'Idle', 'val_2': 2, 'text_2': b'Run'}))
     # No default text: a value without an entry reads as the raw value.
     expected.append(expectation(0, 'a_state', t, [['Off', 'Idle', 'Run'][int(v)] if v < 3 else int(v) for v in state_raw]))
+
+    # Interpolated value table on a float channel with missing (NaN) samples: NaN stays NaN.
+    table_raw = np.where(i % 10 == 0, np.nan, (i % 7) * 0.25)
+    signals.append(Signal(samples=table_raw, timestamps=t, name='a_table_nan', conversion={
+        'raw_0': 0.0, 'phys_0': 0.0, 'raw_1': 1.0, 'phys_1': 10.0, 'interpolation': True}))
+    expected.append(expectation(0, 'a_table_nan', t, [v if math.isnan(v) else min(10.0, v * 10) for v in table_raw]))
+
+    # A value-to-text table whose default is a nested range table: for an integer channel the
+    # range [0, 1] includes 1 also when reached through the reference. The expected values follow
+    # the format, not asammdf's own reading (8.8.27 reads range tables differently).
+    nested_raw = np.array([0, 1, 2, 5])[i % 4].astype(np.uint8)
+    signals.append(Signal(samples=nested_raw, timestamps=t, name='a_nested', conversion={
+        'val_0': 5, 'text_0': 'five',
+        'default_addr': {'lower_0': 0, 'upper_0': 1, 'phys_0': 10, 'default': 99}}))
+    expected.append(expectation(0, 'a_nested', t, [{0: 10.0, 1: 10.0, 2: 99.0, 5: 'five'}[int(v)] for v in nested_raw]))
     return signals, expected
 
 

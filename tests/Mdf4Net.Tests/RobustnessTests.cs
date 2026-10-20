@@ -145,6 +145,114 @@ public class RobustnessTests
         file.FindChannel("v")!.ReadValues().Should().Equal(0.0);
     }
 
+    [Theory]
+    [InlineData(2, 3, false)]
+    [InlineData(2, 4, true)]
+    [InlineData(32, 40, true)]
+    public void Conversion_Chains_Assembled_From_Cached_Parts_Respect_MaxNestingDepth(int maxDepth, int levels, bool rejected)
+    {
+        // Channel k uses conversion k, which refers to conversion k-1. Read in channel order, each
+        // parse finds its successor in the cache and recurses only one level, while the chain
+        // itself grows with every channel.
+        var raw = new RawMdf();
+        PendingBlock previous = raw.Linear(2, 0);
+        PendingBlock? channels = raw.Channel("c0", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: previous);
+        PendingBlock first = channels;
+        for (int level = 1; level < levels; level++)
+        {
+            var data = new byte[24 + 8];
+            data[0] = (byte)Mdf4ConversionType.ValueToText;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+            previous = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("x"), previous }, data);
+            PendingBlock channel = raw.Channel("c" + level, Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: previous);
+            channels.Links[0] = channel;
+            channels = channel;
+        }
+
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, first);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 3 })));
+
+        Action open = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxNestingDepth = maxDepth });
+            MdfTestFile.ReadEverything(file);
+        };
+        if (rejected)
+        {
+            open.Should().Throw<Mdf4FormatException>().WithMessage("*MaxNestingDepth*");
+        }
+        else
+        {
+            open.Should().NotThrow();
+        }
+    }
+
+    [Fact]
+    public void A_Forged_Transposition_Column_Count_Does_Not_Drive_The_Untransposition()
+    {
+        // Sixteen DZ blocks with one byte each and a column count of int.MaxValue: no complete
+        // row, so nothing is transposed. Iterating over the column count instead costs about a
+        // second per block; the bound below leaves an order of magnitude to the fixed code's
+        // milliseconds and to a loaded runner.
+        const int Blocks = 16;
+        var raw = new RawMdf();
+        var links = new object?[Blocks + 1];
+        var list = new byte[8 + (Blocks * 8)];
+        BinaryPrimitives.WriteUInt32LittleEndian(list.AsSpan(4), Blocks);
+        for (int i = 0; i < Blocks; i++)
+        {
+            byte[] compressed = Zlib.Compress(new[] { (byte)i }, 0, 1);
+            var fields = new byte[24 + compressed.Length];
+            System.Text.Encoding.ASCII.GetBytes("DT", 0, 2, fields, 0);
+            fields[2] = 1;
+            BinaryPrimitives.WriteUInt32LittleEndian(fields.AsSpan(4), int.MaxValue);
+            BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(8), 1);
+            BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(16), (ulong)compressed.Length);
+            compressed.CopyTo(fields, 24);
+            links[i + 1] = raw.Block("##DZ", Array.Empty<object?>(), fields);
+            BinaryPrimitives.WriteInt64LittleEndian(list.AsSpan(8 + (i * 8)), i);
+        }
+
+        PendingBlock dl = raw.Block("##DL", links, list);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        PendingBlock cg = raw.ChannelGroup(0, Blocks, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.Block("##HL", new object?[] { dl }, new byte[] { 0, 0, 1, 0, 0, 0, 0, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        file.FindChannel("v")!.ReadDoubles().Should().Equal(Enumerable.Range(0, Blocks).Select(i => (double)i));
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+    }
+
+    [Theory]
+    [InlineData(2, new byte[] { 1, 0, 2 }, "middle of a record")]
+    [InlineData(3, new byte[] { 1, 0, 2, 0 }, "declares 3 records")]
+    public void A_Finalized_File_Whose_Data_Ends_Early_Is_A_Format_Error(ulong cycles, byte[] data, string message)
+    {
+        var raw = new RawMdf();
+        PendingBlock value = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 16);
+        PendingBlock cg = raw.ChannelGroup(0, cycles, 2, 0, value);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(data)));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*{message}*");
+    }
+
+    [Fact]
+    public void An_Unsorted_Finalized_File_Cut_After_A_Record_Id_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock value = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        PendingBlock cg = raw.ChannelGroup(1, 5, 1, 0, value);
+        byte[] bytes = raw.Build(raw.DataGroup(1, cg, raw.DataBlock(new byte[] { 1, 7, 1 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*middle of a record*");
+    }
+
     [Fact]
     public void A_Conversion_That_Refers_To_Itself_Is_Detected()
     {

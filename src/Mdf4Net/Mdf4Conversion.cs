@@ -15,6 +15,15 @@ public sealed class Mdf4Conversion
 
     private Mdf4Conversion(Mdf4ConversionType type, string? name, string? unit, string? comment, double[] values, object?[] references)
     {
+        Height = 1;
+        foreach (object? reference in references)
+        {
+            if (reference is Mdf4Conversion nested)
+            {
+                Height = Math.Max(Height, nested.Height + 1);
+            }
+        }
+
         Type = type;
         Name = name;
         Unit = unit;
@@ -25,6 +34,9 @@ public sealed class Mdf4Conversion
 
     /// <summary>The conversion type.</summary>
     public Mdf4ConversionType Type { get; }
+
+    /// <summary>Levels of this conversion including all nested ones (1 for a leaf).</summary>
+    internal int Height { get; }
 
     /// <summary>The conversion name, if any.</summary>
     public string? Name { get; }
@@ -81,7 +93,7 @@ public sealed class Mdf4Conversion
             case Mdf4ConversionType.ValueRangeToValue:
                 return RangeToValue(raw, rawIsInteger);
             case Mdf4ConversionType.ValueToText:
-                return ValueToText(raw);
+                return ValueToText(raw, rawIsInteger);
             case Mdf4ConversionType.ValueRangeToText:
                 return RangeToText(raw, rawIsInteger);
             case Mdf4ConversionType.TextToValue:
@@ -169,6 +181,15 @@ public sealed class Mdf4Conversion
         try
         {
             Mdf4Conversion conversion = Parse(reader, link, depth);
+
+            // The recursion depth alone is not enough: a nested conversion may come from the cache,
+            // already parsed for another channel, and stack arbitrarily many levels under this one.
+            // The height counts every level, cached or not, and bounds evaluation as well.
+            if (conversion.Height > reader.Options.MaxNestingDepth + 1)
+            {
+                throw Mdf4FormatException.At(link, "Conversions are nested deeper than MaxNestingDepth");
+            }
+
             reader.Conversions[link] = conversion;
             return conversion;
         }
@@ -224,8 +245,9 @@ public sealed class Mdf4Conversion
     private double Table(double raw, bool interpolate)
     {
         int pairs = _values.Length / 2;
-        if (pairs == 0)
+        if (pairs == 0 || double.IsNaN(raw))
         {
+            // NaN compares false with every key; it stays NaN rather than becoming a table value.
             return raw;
         }
 
@@ -279,18 +301,18 @@ public sealed class Mdf4Conversion
         return _values.Length > 0 ? _values[_values.Length - 1] : raw;
     }
 
-    private object ValueToText(double raw)
+    private object ValueToText(double raw, bool rawIsInteger)
     {
         int n = _values.Length;
         for (int i = 0; i < n && i < _references.Length; i++)
         {
             if (_values[i].Equals(raw))
             {
-                return Resolve(_references[i], raw);
+                return Resolve(_references[i], raw, rawIsInteger);
             }
         }
 
-        return Resolve(n < _references.Length ? _references[n] : null, raw);
+        return Resolve(n < _references.Length ? _references[n] : null, raw, rawIsInteger);
     }
 
     private object RangeToText(double raw, bool rawIsInteger)
@@ -300,20 +322,20 @@ public sealed class Mdf4Conversion
         {
             if (InRange(raw, _values[2 * i], _values[(2 * i) + 1], rawIsInteger))
             {
-                return Resolve(_references[i], raw);
+                return Resolve(_references[i], raw, rawIsInteger);
             }
         }
 
-        return Resolve(n < _references.Length ? _references[n] : null, raw);
+        return Resolve(n < _references.Length ? _references[n] : null, raw, rawIsInteger);
     }
 
     private static bool InRange(double raw, double min, double max, bool rawIsInteger)
         => rawIsInteger ? raw >= min && raw <= max : raw >= min && raw < max;
 
-    private static object Resolve(object? reference, double raw) => reference switch
+    private static object Resolve(object? reference, double raw, bool rawIsInteger) => reference switch
     {
         string text => text,
-        Mdf4Conversion nested => nested.Convert(raw),
+        Mdf4Conversion nested => nested.Convert(raw, rawIsInteger),
         _ => raw,
     };
 }

@@ -125,10 +125,19 @@ public sealed class Mdf4ChannelGroup
 
     /// <summary>
     /// The master channel's values, converted to physical units (normally seconds). For a group
-    /// without a master channel, the zero-based record index.
+    /// without any master channel, the zero-based record index.
     /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The group takes its master from another group (<see cref="Mdf4ChannelGroupFlags.RemoteMaster"/>),
+    /// which this library does not resolve.
+    /// </exception>
     public double[] ReadTimestamps()
     {
+        if (MasterChannel is null && (Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
+        {
+            throw new NotSupportedException($"Channel group '{Name}' uses the master channel of another group (remote master), which is not supported.");
+        }
+
         if (MasterChannel is not null)
         {
             if (!MasterChannel.IsNumeric)

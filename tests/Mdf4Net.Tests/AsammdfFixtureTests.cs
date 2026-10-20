@@ -56,10 +56,17 @@ public class AsammdfFixtureTests
                 {
                     JsonValueKind.String => wanted[i].GetString(),
                     JsonValueKind.Number => wanted[i].GetDouble(),
+
+                    // JSON has no NaN or infinity; they travel as {"float": "NaN"}.
+                    JsonValueKind.Object => double.Parse(wanted[i].GetProperty("float").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
                     _ => throw new InvalidOperationException($"unexpected JSON {wanted[i]}"),
                 };
 
-                if (want is double d)
+                if (want is double nan && double.IsNaN(nan))
+                {
+                    values[i].Should().BeOfType<double>().Which.Should().Be(double.NaN, $"{fixture}/{name}[{i}]");
+                }
+                else if (want is double d)
                 {
                     values[i].Should().BeOfType<double>().Which.Should().BeApproximately(d, Math.Abs(d) * 1e-12, $"{fixture}/{name}[{i}]");
                 }

@@ -17,6 +17,7 @@ public sealed class Mdf4Channel
     private Mdf4ChannelGroup? _signalDataGroup;
     private Mdf4Channel? _lengthChannel;
     private byte[]? _signalData;
+    private bool _layoutValid;
 
     internal Mdf4Channel(Mdf4ChannelGroup group, Mdf4Channel? parent, RawBlock block, HashSet<long> visited, int depth)
     {
@@ -147,7 +148,7 @@ public sealed class Mdf4Channel
     /// <exception cref="NotSupportedException">The conversion type is not supported.</exception>
     public double[] ReadDoubles()
     {
-        ThrowIfUnknownType();
+        ValidateLayout();
         if (!IsNumeric)
         {
             throw new InvalidOperationException($"Channel '{Name}' holds {DataType} values; read it with ReadValues().");
@@ -210,7 +211,7 @@ public sealed class Mdf4Channel
     /// </summary>
     internal void EnsureUsableAsMaster()
     {
-        ThrowIfUnknownType();
+        ValidateLayout();
         if (!IsNumeric)
         {
             throw Mdf4FormatException.At(Offset, $"Master channel '{Name}' holds {DataType} values");
@@ -237,13 +238,7 @@ public sealed class Mdf4Channel
             return false;
         }
 
-        if (ChannelGroup.InvalidationBytes == 0)
-        {
-            // The channel says its validity is in an invalidation bit the group does not have:
-            // reading every value as valid would hide that the layout is broken.
-            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has an invalidation bit, but its channel group has no invalidation bytes");
-        }
-
+        CheckInvalidationLayout();
         long byteIndex = ChannelGroup.DataBytes + (InvalidationBitPosition >> 3);
         if (byteIndex >= record.Length)
         {
@@ -287,7 +282,7 @@ public sealed class Mdf4Channel
 
     internal double DecodeRawNumber(ReadOnlySpan<byte> record, long index)
     {
-        ThrowIfUnknownType();
+        ValidateLayout();
         switch (ChannelType)
         {
             case Mdf4ChannelType.VirtualMaster:
@@ -317,7 +312,7 @@ public sealed class Mdf4Channel
 
     internal object? DecodeRaw(ReadOnlySpan<byte> record, long index)
     {
-        ThrowIfUnknownType();
+        ValidateLayout();
         switch (ChannelType)
         {
             case Mdf4ChannelType.VirtualMaster:
@@ -374,7 +369,9 @@ public sealed class Mdf4Channel
             // The size of a maximum-length value is held by another integer channel of the same
             // record; a link that resolves to anything else must not read as "no size limit".
             _lengthChannel = ChannelGroup.ChannelAt(_dataLink);
-            if (_lengthChannel is null || ReferenceEquals(_lengthChannel, this) || !_lengthChannel.IsInteger)
+            // A VLSD, maximum-length or virtual channel holds no size in the record.
+            if (_lengthChannel is null || ReferenceEquals(_lengthChannel, this) || !_lengthChannel.IsInteger
+                || _lengthChannel.ChannelType != Mdf4ChannelType.FixedLength)
             {
                 throw Mdf4FormatException.At(Offset, $"Maximum-length channel '{Name}' does not refer to an integer size channel of its channel group");
             }
@@ -383,8 +380,9 @@ public sealed class Mdf4Channel
 
     private object?[] Read(bool physical)
     {
-        // Before anything else: an unknown type must not pass as "all values invalid" either.
-        ThrowIfUnknownType();
+        // Before anything else: invalidation flags must not let a broken layout pass as a channel
+        // of null samples.
+        ValidateLayout();
         var result = new List<object?>();
         long index = 0;
         foreach (ArraySegment<byte> record in ChannelGroup.DataGroup.EnumerateRecords(ChannelGroup))
@@ -439,7 +437,7 @@ public sealed class Mdf4Channel
     /// file) is refused before a value is produced, rather than read as the nearest known kind.
     /// Listing such a channel is fine; reading it is not.
     /// </summary>
-    internal void ThrowIfUnknownType()
+    private void ThrowIfUnknownType()
     {
         if (ChannelType > Mdf4ChannelType.VirtualData)
         {
@@ -452,12 +450,89 @@ public sealed class Mdf4Channel
         }
     }
 
-    private ReadOnlySpan<byte> FieldBytes(ReadOnlySpan<byte> record)
+    /// <summary>
+    /// Checks everything about the channel that does not depend on a record: its types, the bit
+    /// layout of its value, the position of its invalidation bit, the sync type of a master and
+    /// the size channel of a maximum-length value. Every read path calls it before it looks at a
+    /// single record, so that no flag (all values invalid, an invalidation bit) can let a broken
+    /// layout pass as a channel of missing values. Checked once per channel.
+    /// </summary>
+    internal void ValidateLayout()
     {
-        // Strings, byte arrays and the composite types are whole bytes; a bit count that is not
-        // would silently drop its last bits.
+        if (_layoutValid)
+        {
+            return;
+        }
+
+        ThrowIfUnknownType();
+        CheckInvalidationLayout();
+        switch (ChannelType)
+        {
+            case Mdf4ChannelType.VirtualMaster:
+            case Mdf4ChannelType.VirtualData:
+                break;
+            case Mdf4ChannelType.VariableLength:
+                RequireByteValues();
+                if (BitCount is 0 or > 64 || BitOffset != 0)
+                {
+                    throw Mdf4FormatException.At(Offset, $"VLSD channel '{Name}' has an invalid offset field ({BitOffset}+{BitCount})");
+                }
+
+                RequireWithinDataBytes(BitField.ByteSpan(0, (int)BitCount));
+                break;
+            case Mdf4ChannelType.MaximumLength:
+                RequireByteValues();
+                CheckValueLayout();
+                if (_lengthChannel is not null)
+                {
+                    _lengthChannel.ValidateLayout();
+                }
+
+                break;
+            default:
+                CheckValueLayout();
+                break;
+        }
+
+        if (ChannelType is Mdf4ChannelType.Master or Mdf4ChannelType.VirtualMaster or Mdf4ChannelType.Synchronization)
+        {
+            if (SyncType == Mdf4SyncType.None)
+            {
+                throw Mdf4FormatException.At(Offset, $"{ChannelType} channel '{Name}' declares no sync type");
+            }
+
+            if (SyncType > Mdf4SyncType.Index)
+            {
+                throw new NotSupportedException($"{ChannelType} channel '{Name}' has sync type {(byte)SyncType}, which is not supported.");
+            }
+        }
+
+        _layoutValid = true;
+    }
+
+    private void RequireByteValues()
+    {
+        if (DataType < Mdf4DataType.StringLatin1)
+        {
+            throw Mdf4FormatException.At(Offset, $"{ChannelType} channel '{Name}' holds {DataType} values, which are not stored as variable-length data");
+        }
+    }
+
+    /// <summary>The bit layout of a value stored in the record itself.</summary>
+    private void CheckValueLayout()
+    {
+        if (BitOffset > 7 || (BitOffset != 0 && !IsInteger))
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' declares a bit offset of {BitOffset}, which only integer channels may have");
+        }
+
         bool valid = DataType switch
         {
+            <= Mdf4DataType.SignedIntegerBe => BitCount is > 0 and <= 64,
+            Mdf4DataType.FloatLe or Mdf4DataType.FloatBe => BitCount is 16 or 32 or 64,
+
+            // Strings, byte arrays and the composite types are whole bytes; a bit count that is
+            // not would silently drop its last bits.
             Mdf4DataType.CanOpenDate => BitCount == 56,
             Mdf4DataType.CanOpenTime => BitCount == 48,
             Mdf4DataType.ComplexLe or Mdf4DataType.ComplexBe => BitCount is 32 or 64 or 128,
@@ -468,6 +543,40 @@ public sealed class Mdf4Channel
         {
             throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has {BitCount} bits, which is not a whole {DataType} field");
         }
+
+        RequireWithinDataBytes(BitField.ByteSpan(BitOffset, (int)BitCount));
+    }
+
+    private void RequireWithinDataBytes(int bytes)
+    {
+        if ((long)ByteOffset + bytes > ChannelGroup.DataBytes)
+        {
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' lies outside the data bytes of its record ({ByteOffset}+{bytes} > {ChannelGroup.DataBytes})");
+        }
+    }
+
+    private void CheckInvalidationLayout()
+    {
+        if ((Flags & Mdf4ChannelFlags.InvalidationBitValid) == 0)
+        {
+            return;
+        }
+
+        if (ChannelGroup.InvalidationBytes == 0)
+        {
+            // The channel says its validity is in an invalidation bit the group does not have:
+            // reading every value as valid would hide that the layout is broken.
+            throw Mdf4FormatException.At(Offset, $"Channel '{Name}' has an invalidation bit, but its channel group has no invalidation bytes");
+        }
+
+        if (InvalidationBitPosition >> 3 >= ChannelGroup.InvalidationBytes)
+        {
+            throw Mdf4FormatException.At(Offset, $"Invalidation bit of channel '{Name}' lies outside the record");
+        }
+    }
+
+    private ReadOnlySpan<byte> FieldBytes(ReadOnlySpan<byte> record)
+    {
 
         int bytes = (int)Math.Min(BitCount / 8, int.MaxValue);
         CheckFits(record, bytes);

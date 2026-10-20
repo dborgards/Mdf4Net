@@ -215,6 +215,7 @@ internal static class CanDataFrameReader
         }
 
         master?.EnsureUsableAsMaster();
+        Mdf4Channel? frameParent = id.Parent;
 
         // The ASAM bus logging layout: the payload is a stored byte array, the frame fields are
         // stored integers. A group that only has the names right is a format error, not a source
@@ -225,10 +226,11 @@ internal static class CanDataFrameReader
             throw Mdf4FormatException.At(bytes.Offset, $"CAN payload channel '{bytes.Name}' is a {bytes.ChannelType} {bytes.DataType} channel, not stored bytes");
         }
 
-        bytes.ThrowIfUnknownType();
+        bytes.ValidateLayout();
+        frameParent?.ValidateLayout();
         foreach (Mdf4Channel? field in new[] { id, ideChannel, dlcChannel, lengthChannel, busChannelField, dirChannel, edlChannel, brsChannel, esiChannel })
         {
-            field?.ThrowIfUnknownType();
+            field?.ValidateLayout();
             if (field is not null && (!field.IsInteger || field.ChannelType != Mdf4ChannelType.FixedLength))
             {
                 throw Mdf4FormatException.At(field.Offset, $"CAN frame field '{field.Name}' is a {field.ChannelType} {field.DataType} channel, not a stored integer");
@@ -238,7 +240,7 @@ internal static class CanDataFrameReader
         // A field marked invalid in a record carries no value: a frame without a valid identifier,
         // payload, time stamp or frame is not a frame and is skipped; an optional field that is
         // invalid reads as if the group did not have it.
-        Mdf4Channel? frame = id.Parent;
+        Mdf4Channel? frame = frameParent;
 
         long index = 0;
         foreach (ArraySegment<byte> segment in group.DataGroup.EnumerateRecords(group))
@@ -267,7 +269,7 @@ internal static class CanDataFrameReader
             // The declared length has to be held by the payload field and be a length a CAN (FD)
             // frame can have; anything else is corruption, not something to clamp into shape.
             double declared = length is not null ? length.DecodeRawNumber(span, index)
-                : dlc is not null ? CanDataFrame.DlcToLength((int)dlc.DecodeRawNumber(span, index) & 0x0F, fd)
+                : dlc is not null ? CanDataFrame.DlcToLength(Dlc(dlc, span, index), fd)
                 : payload.Length;
             if (declared < 0 || declared > payload.Length || CanDataFrame.LengthToDlc((int)declared, fd) < 0)
             {
@@ -295,6 +297,15 @@ internal static class CanDataFrameReader
             index++;
             yield return new CanDataFrame(time, frameId, data, flags, busChannel, direction);
         }
+    }
+
+    /// <summary>A data length code is 0 to 15; any other value is a broken field, not one to mask.</summary>
+    private static int Dlc(Mdf4Channel channel, ReadOnlySpan<byte> record, long index)
+    {
+        double dlc = channel.DecodeRawNumber(record, index);
+        return dlc is >= 0 and <= 15
+            ? (int)dlc
+            : throw Mdf4FormatException.At(channel.Offset, $"CAN frame {index} has the data length code {dlc}");
     }
 
     // The field is an integer (checked above); a magnitude test avoids comparing doubles for equality.

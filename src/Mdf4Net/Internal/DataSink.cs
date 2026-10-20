@@ -153,13 +153,19 @@ internal sealed class DataSink
 
     private void WriteBlock(byte[] data, int count)
     {
+        // The bookkeeping moves only once the block is in the file, so that a write that fails
+        // (disk full, I/O error) leaves the sink as it was and a later attempt writes it again.
+        long offset = AppendBlock(data, count);
         _starts.Add(_flushed);
         _flushed += count;
+        _blocks.Add(offset);
+    }
 
+    private long AppendBlock(byte[] data, int count)
+    {
         if (_compression == Mdf4Compression.None)
         {
-            _blocks.Add(_appender.AppendBlock(_blockId, Array.Empty<long>(), data, 0, count));
-            return;
+            return _appender.AppendBlock(_blockId, Array.Empty<long>(), data, 0, count);
         }
 
         byte[] source = data;
@@ -179,6 +185,6 @@ internal sealed class DataSink
         BinaryPrimitives.WriteUInt32LittleEndian(fields.AsSpan(4, 4), (uint)zipParameter);
         BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(8, 8), (ulong)count);
         BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(16, 8), (ulong)compressed.Length);
-        _blocks.Add(_appender.AppendBlock("##DZ", Array.Empty<long>(), fields, compressed, 0, compressed.Length));
+        return _appender.AppendBlock("##DZ", Array.Empty<long>(), fields, compressed, 0, compressed.Length);
     }
 }

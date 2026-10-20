@@ -35,6 +35,7 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
     private readonly DateTimeOffset _startTime;
     private readonly DateTimeOffset _createdAt;
     private long _end;
+    private bool _finalizing;
     private bool _completed;
     private bool _disposed;
 
@@ -60,7 +61,10 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
     /// <summary>The channel groups added so far.</summary>
     public IReadOnlyList<Mdf4ChannelGroupWriter> ChannelGroups => _groups;
 
-    /// <summary>True once the file was finalized.</summary>
+    /// <summary>
+    /// True once the file was finalized successfully. A <see cref="Complete"/> that failed (for
+    /// example on an I/O error) leaves this false; calling <see cref="Complete"/> again retries.
+    /// </summary>
     public bool IsCompleted => _completed;
 
     /// <summary>Creates (or overwrites) a file on disk.</summary>
@@ -177,7 +181,11 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
             return;
         }
 
-        _completed = true;
+        // From the first attempt on, no more records are accepted. The file only counts as
+        // completed once the identification says MDF; if an attempt fails (an I/O error), it
+        // can be repeated, and Dispose repeats it. Every step below can run again: data sinks
+        // keep their state until a block is in the file, and metadata is rewritten in place.
+        _finalizing = true;
         var dataLinks = new long[_groups.Count];
         for (int i = 0; i < _groups.Count; i++)
         {
@@ -215,6 +223,7 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
         _stream.Write(id, 0, id.Length);
         _stream.Position = _end;
         _stream.Flush();
+        _completed = true;
     }
 
     /// <summary>Completes the file (if not done yet) and closes the stream unless <c>leaveOpen</c>.</summary>
@@ -264,7 +273,7 @@ public sealed class Mdf4Writer : IDisposable, IBlockAppender
 
     internal void ThrowIfCompleted()
     {
-        if (_completed || _disposed)
+        if (_finalizing || _completed || _disposed)
         {
             throw new InvalidOperationException("The writer was completed; nothing more can be written.");
         }

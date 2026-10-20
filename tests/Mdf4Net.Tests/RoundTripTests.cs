@@ -425,6 +425,153 @@ public class RoundTripTests
         open.Should().Throw<Mdf4FormatException>();
     }
 
+    [Fact]
+    public void A_Completion_That_Fails_Can_Be_Repeated_At_Any_Write()
+    {
+        // Count the writes a successful completion makes, then let each one fail in turn: the
+        // writer must not claim completion, must refuse new records, and a second Complete must
+        // still produce the whole file.
+        int completionWrites;
+        using (var probe = new FailingStream())
+        {
+            using Mdf4Writer writer = Mdf4Writer.Create(probe, Options, leaveOpen: true);
+            Fill(writer);
+            int before = probe.Writes;
+            writer.Complete();
+            completionWrites = probe.Writes - before;
+        }
+
+        completionWrites.Should().BeGreaterThan(10);
+        for (int failAt = 1; failAt <= completionWrites; failAt++)
+        {
+            using var stream = new FailingStream();
+            using Mdf4Writer writer = Mdf4Writer.Create(stream, Options, leaveOpen: true);
+            Mdf4ChannelGroupWriter group = Fill(writer);
+            stream.FailOnWrite(failAt);
+
+            ((Action)writer.Complete).Should().Throw<System.IO.IOException>($"write {failAt} fails");
+            writer.IsCompleted.Should().BeFalse($"write {failAt} failed, so the file is not finalized");
+            ((Action)(() => group.BeginRecord())).Should().Throw<InvalidOperationException>();
+
+            if (failAt % 2 == 0)
+            {
+                writer.Complete();
+            }
+            else
+            {
+                writer.Dispose();
+            }
+
+            using Mdf4File file = MdfTestFile.Open(stream.ToArray());
+            file.IsFinalized.Should().BeTrue($"the retry after write {failAt} finalizes");
+            file.FindChannel("v")!.ReadDoubles().Should().Equal(Enumerable.Range(0, 300).Select(i => (double)i), $"write {failAt}");
+            file.FindChannel("text")!.ReadValues().Should().Equal(Enumerable.Range(0, 300).Select(i => (object)("t" + i)), $"write {failAt}");
+            AssertListOffsetsMatchBlockLengths(file, $"write {failAt}");
+        }
+
+        static Mdf4ChannelGroupWriter Fill(Mdf4Writer writer)
+        {
+            var definition = new Mdf4ChannelGroupDefinition("G");
+            definition.AddTime();
+            Mdf4ChannelDefinition value = definition.Add(Mdf4ChannelDefinition.UInt16("v"));
+            Mdf4ChannelDefinition text = definition.Add(Mdf4ChannelDefinition.VariableLengthString("text"));
+            Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
+            for (int i = 0; i < 300; i++)
+            {
+                group.BeginRecord(i * 0.01).Set(value, (long)i).Set(text, "t" + i).Commit();
+            }
+
+            return group;
+        }
+    }
+
+    [Fact]
+    public void A_Commit_That_Fails_On_A_Block_Write_Can_Be_Repeated()
+    {
+        // A block write fails in the middle of a recording: the failed commit leaves the sinks
+        // unchanged, so repeating it continues the file without a gap or shifted offsets.
+        using var stream = new FailingStream();
+        int failures = 0;
+        using (Mdf4Writer writer = Mdf4Writer.Create(stream, Options, leaveOpen: true))
+        {
+            var definition = new Mdf4ChannelGroupDefinition("G");
+            definition.AddTime();
+            Mdf4ChannelDefinition value = definition.Add(Mdf4ChannelDefinition.UInt16("v"));
+            Mdf4ChannelDefinition text = definition.Add(Mdf4ChannelDefinition.VariableLengthString("text"));
+            Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
+            for (int i = 0; i < 600; i++)
+            {
+                if (i % 97 == 50)
+                {
+                    stream.FailOnWrite(1 + (i % 3));
+                }
+
+                Mdf4RecordBuilder record = group.BeginRecord(i * 0.01).Set(value, (long)i).Set(text, "t" + i);
+                try
+                {
+                    record.Commit();
+                }
+                catch (System.IO.IOException)
+                {
+                    failures++;
+                    record.Commit();
+                }
+            }
+        }
+
+        failures.Should().BeGreaterThan(0, "the test is only meaningful if writes actually failed");
+        using Mdf4File file = MdfTestFile.Open(stream.ToArray());
+        file.FindChannel("v")!.ReadDoubles().Should().Equal(Enumerable.Range(0, 600).Select(i => (double)i));
+        file.FindChannel("text")!.ReadValues().Should().Equal(Enumerable.Range(0, 600).Select(i => (object)("t" + i)));
+        AssertListOffsetsMatchBlockLengths(file, "after failed commits");
+    }
+
+    /// <summary>
+    /// Each <c>dl_offset</c> must be the position of its block in the logical data stream. The
+    /// reader here does not need them, other readers may, so they are checked separately.
+    /// </summary>
+    private static void AssertListOffsetsMatchBlockLengths(Mdf4File file, string because)
+    {
+        Mdf4Net.Internal.BlockReader reader = file.Reader;
+        foreach (Mdf4DataGroup group in file.DataGroups)
+        {
+            long link = group.DataLink;
+            if (link == 0)
+            {
+                continue;
+            }
+
+            if (reader.ReadHeader(link).Id == "##HL")
+            {
+                link = reader.ReadBlock(link, "##HL").Link(0);
+            }
+
+            if (reader.ReadHeader(link).Id != "##DL")
+            {
+                continue;
+            }
+
+            long expected = 0;
+            for (long dl = link; dl != 0;)
+            {
+                Mdf4Net.Internal.RawBlock list = reader.ReadBlock(dl, "##DL");
+                uint count = list.U32(4);
+                for (int i = 0; i < count; i++)
+                {
+                    ((long)list.U64(8 + (i * 8))).Should().Be(expected, $"{because}: dl_offset {i} of the list at 0x{dl:X}");
+                    Mdf4Net.Internal.BlockHeader entry = reader.ReadHeader(list.Links[i + 1]);
+                    expected += entry.Id == "##DZ"
+                        ? (long)BitConverter.ToUInt64(reader.ReadBytes(entry.DataOffset + 8, 8), 0)
+                        : entry.DataLength;
+                }
+
+                dl = list.Link(0);
+            }
+        }
+    }
+
+    private static readonly Mdf4WriterOptions Options = new() { Compression = Mdf4Compression.TransposedDeflate, DataBlockSize = 1024 };
+
     [Theory]
     [InlineData((byte)0x00, (short)120, 0, "2026-10-20T10:00:00+00:00")]
     [InlineData((byte)0x02, (short)120, 0, "2026-10-20T12:00:00+02:00")]

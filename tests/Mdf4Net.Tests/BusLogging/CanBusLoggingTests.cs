@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
 using Mdf4Net.BusLogging;
+using Mdf4Net.Internal;
 using Mdf4Net.Tests.Infrastructure;
 using Xunit;
 
@@ -62,23 +63,79 @@ public class CanBusLoggingTests
     }
 
     [Fact]
-    public void A_Bus_Logging_Group_With_A_Remote_Master_Is_Refused_On_Both_Read_Paths()
+    public void A_Bus_Logging_Group_With_A_Remote_Master_Takes_Its_Time_Stamps_From_That_Group_On_Both_Read_Paths()
     {
         // A CAN_DataFrame group without its own time channel, taking it from another group
-        // (MDF 4.20 remote master): record indices must not be passed off as time stamps.
+        // (MDF 4.20 remote master). The second master sample is invalid: that frame has no time
+        // stamp and is not a frame, just as with an invalid master sample of the group's own.
         var raw = new Mdf4Net.Tests.Infrastructure.RawMdf();
-        var dataBytes = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 4, 64, flags: Mdf4ChannelFlags.BusEvent);
-        var id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 29, next: dataBytes, flags: Mdf4ChannelFlags.BusEvent);
-        var frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 0, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
-        var cg = raw.ChannelGroup(0, 3, 12, 0, frame, flags: (ushort)(Mdf4ChannelGroupFlags.BusEvent | Mdf4ChannelGroupFlags.RemoteMaster));
-        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[36])));
+        (PendingBlock master, PendingBlock dgMaster) = RemoteMasterReaderTests.MasterGroup(raw, invalidation: true);
+        byte[] bytes = raw.Build(RemoteCanGroup(raw, master, dgMaster), version: 420);
 
         using Mdf4File file = MdfTestFile.Open(bytes);
-        Mdf4ChannelGroup group = file.ChannelGroups.Single();
+        Mdf4ChannelGroup group = file.ChannelGroups.First();
         group.IsCanDataFrameGroup().Should().BeTrue();
-        ((Action)(() => group.ReadCanDataFrames().ToList())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
-        ((Action)(() => file.ReadCanDataFrames())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
-        ((Action)(() => group.ReadTimestamps())).Should().Throw<NotSupportedException>().WithMessage("*remote master*");
+        group.RemoteMasterGroup.Should().BeSameAs(file.ChannelGroups.Last());
+
+        double[] timestamps = group.ReadTimestamps();
+        timestamps.Should().HaveCount(3);
+        timestamps[0].Should().Be(0.5);
+        double.IsNaN(timestamps[1]).Should().BeTrue();
+        timestamps[2].Should().Be(1.0);
+
+        var expected = new[]
+        {
+            new CanDataFrame(0.5, 0x100, new byte[] { 0xAA, 0, 0, 0, 0, 0, 0, 0 }, busChannel: 0),
+            new CanDataFrame(1.0, 0x102, new byte[] { 0xBB, 0, 0, 0, 0, 0, 0, 0 }, busChannel: 0),
+        };
+        group.ReadCanDataFrames().Should().Equal(expected);
+        file.ReadCanDataFrames().Should().Equal(expected);
+    }
+
+    [Fact]
+    public void A_Remote_Master_Sample_That_Is_NaN_But_Valid_Keeps_Its_Frame()
+    {
+        // Only an invalidated master sample drops a frame; a stored NaN is a time stamp of NaN,
+        // as it is for a group's own master.
+        var raw = new Mdf4Net.Tests.Infrastructure.RawMdf();
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.FloatLe, 0, 32, sync: Mdf4SyncType.Time);
+        PendingBlock master = raw.ChannelGroup(0, 3, 4, 0, time, name: "master");
+        var records = new byte[12];
+        BitConverter.GetBytes(0.5f).CopyTo(records, 0);
+        BitConverter.GetBytes(float.NaN).CopyTo(records, 4);
+        BitConverter.GetBytes(1.0f).CopyTo(records, 8);
+        PendingBlock dgMaster = raw.DataGroup(0, master, raw.DataBlock(records));
+        byte[] bytes = raw.Build(RemoteCanGroup(raw, master, dgMaster), version: 420);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        List<CanDataFrame> frames = file.ChannelGroups.First().ReadCanDataFrames().ToList();
+        frames.Select(f => f.Id).Should().Equal(0x100u, 0x101u, 0x102u);
+        frames[0].Timestamp.Should().Be(0.5);
+        double.IsNaN(frames[1].Timestamp).Should().BeTrue();
+        frames[2].Timestamp.Should().Be(1.0);
+    }
+
+    /// <summary>
+    /// A sorted data group in front of <paramref name="masterDataGroup"/> holding a CAN_DataFrame
+    /// group with the remote master <paramref name="masterGroup"/> and three frames: IDs 0x100,
+    /// 0x101 and 0x102 with the payloads AA 00…, 00…, BB 00….
+    /// </summary>
+    private static PendingBlock RemoteCanGroup(Mdf4Net.Tests.Infrastructure.RawMdf raw, PendingBlock masterGroup, PendingBlock masterDataGroup)
+    {
+        PendingBlock dataBytes = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 4, 64, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 29, next: dataBytes, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 0, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock cg = raw.ChannelGroup(0, 3, 12, 0, frame, flags: (ushort)(Mdf4ChannelGroupFlags.BusEvent | Mdf4ChannelGroupFlags.RemoteMaster), masterGroup: masterGroup);
+        var records = new byte[36];
+        records[0] = 0x00;
+        records[1] = 0x01; // ID 0x100
+        records[4] = 0xAA;
+        records[12] = 0x01;
+        records[13] = 0x01; // ID 0x101
+        records[24] = 0x02;
+        records[25] = 0x01; // ID 0x102
+        records[28] = 0xBB;
+        return raw.DataGroup(0, cg, raw.DataBlock(records), next: masterDataGroup);
     }
 
     [Fact]

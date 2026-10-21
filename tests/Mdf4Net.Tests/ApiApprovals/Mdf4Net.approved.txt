@@ -171,6 +171,8 @@ namespace Mdf4Net
         public long Offset { get; }
         public char? PathSeparator { get; }
         public ulong RecordId { get; }
+        public Mdf4Net.Mdf4ChannelGroup? RemoteMasterGroup { get; }
+        public Mdf4Net.Mdf4Channel? ResolvedMasterChannel { get; }
         public Mdf4Net.Mdf4SourceInformation? Source { get; }
         public long CountRecords() { }
         public Mdf4Net.Mdf4Channel? FindChannel(string name) { }

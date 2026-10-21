@@ -73,6 +73,88 @@ public class RobustnessTests
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void Corrupt_Remote_Master_Files_Are_Rejected_Cleanly(int seed)
+    {
+        byte[] full = RemoteMasterReaderTests.BuildRemoteMaster();
+        var random = new Random(seed + 2000);
+        for (int round = 0; round < 250; round++)
+        {
+            byte[] corrupt = (byte[])full.Clone();
+            corrupt[random.Next(corrupt.Length)] = (byte)random.Next(256);
+            corrupt[random.Next(corrupt.Length)] = (byte)random.Next(256);
+            ExpectCleanOutcome(corrupt, $"seed {seed}, round {round}");
+        }
+    }
+
+    [Theory]
+    [InlineData("none", "*no cg_cg_master link*")]
+    [InlineData("self", "*loops back on itself*")]
+    [InlineData("cycle", "*loops back on itself*")]
+    [InlineData("text", "*does not refer to a channel group*")]
+    [InlineData("vlsd", "*VLSD channel group*")]
+    [InlineData("no master", "*has no master channel*")]
+    [InlineData("own master", "*master channel of its own*")]
+    public void A_Remote_Master_Link_That_Does_Not_Lead_To_A_Master_Channel_Is_A_Format_Error(string target, string message)
+    {
+        // The group "remote" is flagged as using a remote master; where its cg_cg_master link
+        // leads decides. A chain is followed, so the link's target is checked for the same.
+        var raw = new RawMdf();
+        (PendingBlock master, PendingBlock dgMaster) = RemoteMasterReaderTests.MasterGroup(raw);
+        PendingBlock value = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: target == "own master" ? raw.Channel("own", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, sync: Mdf4SyncType.Time) : null);
+        PendingBlock remote = raw.ChannelGroup(0, 3, 1, 0, value, name: "remote", flags: (ushort)Mdf4ChannelGroupFlags.RemoteMaster, masterGroup: target == "own master" ? master : null);
+        PendingBlock dgRemote = raw.DataGroup(0, remote, raw.DataBlock(new byte[] { 10, 20, 30 }), next: dgMaster);
+        switch (target)
+        {
+            case "self":
+                remote.Links[6] = remote;
+                break;
+            case "cycle":
+                PendingBlock back = raw.ChannelGroup(0, 3, 1, 0, raw.Channel("w", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8), name: "back", flags: (ushort)Mdf4ChannelGroupFlags.RemoteMaster, masterGroup: remote);
+                remote.Links[6] = back;
+                dgRemote = raw.DataGroup(0, back, raw.DataBlock(new byte[] { 1, 2, 3 }), next: dgRemote);
+                break;
+            case "text":
+                remote.Links[6] = raw.Text("not a channel group");
+                break;
+            case "vlsd":
+                PendingBlock vlsd = raw.ChannelGroup(0, 0, 0, 0, null, flags: (ushort)Mdf4ChannelGroupFlags.VariableLengthSignalData);
+                remote.Links[6] = vlsd;
+                dgRemote = raw.DataGroup(0, vlsd, null, next: dgRemote);
+                break;
+            case "no master":
+                PendingBlock plain = raw.ChannelGroup(0, 3, 1, 0, raw.Channel("p", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8), name: "plain");
+                remote.Links[6] = plain;
+                dgRemote = raw.DataGroup(0, plain, raw.DataBlock(new byte[] { 1, 2, 3 }), next: dgRemote);
+                break;
+        }
+
+        Action open = () => MdfTestFile.Open(raw.Build(dgRemote, version: 420)).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage(message);
+    }
+
+    [Fact]
+    public void A_Remote_Group_With_Another_Record_Count_Than_Its_Master_Group_Is_A_Format_Error_On_Both_Read_Paths()
+    {
+        // Two CAN frames taking their time stamps from a master group with three values: there
+        // is no i-th value for a non-existent record and no record for the third value.
+        var raw = new RawMdf();
+        (PendingBlock master, PendingBlock dgMaster) = RemoteMasterReaderTests.MasterGroup(raw);
+        PendingBlock dataBytes = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 4, 64, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 29, next: dataBytes, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 0, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock cg = raw.ChannelGroup(0, 2, 12, 0, frame, flags: (ushort)(Mdf4ChannelGroupFlags.BusEvent | Mdf4ChannelGroupFlags.RemoteMaster), masterGroup: master);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[24]), next: dgMaster), version: 420);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4ChannelGroup group = file.ChannelGroups.First();
+        group.FindChannel("CAN_DataFrame.ID")!.ReadDoubles().Should().Equal(0, 0);
+        ((Action)(() => group.ReadTimestamps())).Should().Throw<Mdf4FormatException>().WithMessage("*2 records*3 master values*");
+        ((Action)(() => group.ReadCanDataFrames().ToList())).Should().Throw<Mdf4FormatException>().WithMessage("*2 records*3 master values*");
+        ((Action)(() => file.ReadCanDataFrames())).Should().Throw<Mdf4FormatException>().WithMessage("*2 records*3 master values*");
+    }
+
     [Fact]
     public void Corrupted_Link_Fields_Are_Rejected_Cleanly()
     {

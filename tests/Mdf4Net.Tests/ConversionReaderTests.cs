@@ -66,20 +66,6 @@ public class ConversionReaderTests
         values[2].Should().Be(10);
     }
 
-    [Fact]
-    public void A_Group_With_A_Remote_Master_Is_Refused_Rather_Than_Indexed()
-    {
-        var raw = new RawMdf();
-        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
-        PendingBlock cg = raw.ChannelGroup(0, 3, 1, 0, channel, flags: (ushort)Mdf4ChannelGroupFlags.RemoteMaster);
-        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 1, 2, 3 })));
-
-        using Mdf4File file = MdfTestFile.Open(bytes);
-        Action timestamps = () => file.ChannelGroups.Single().ReadTimestamps();
-        timestamps.Should().Throw<NotSupportedException>().WithMessage("*remote master*");
-        file.FindChannel("v")!.ReadDoubles().Should().Equal(1, 2, 3);
-    }
-
     private static void WriteDoubles(byte[] target, int offset, params double[] values)
     {
         for (int i = 0; i < values.Length; i++)

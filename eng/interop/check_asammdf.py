@@ -8,8 +8,9 @@
    frame) is compared with the JSON.
 2. asammdf -> Mdf4Net: this script writes files with asammdf (data types, conversions, strings,
    several groups, compression, MDF 4.20) plus a .json each, and the probe's `verify` command
-   reads them with Mdf4Net and compares. One file (raw_virtual_group) holds a construct neither
-   writer produces; it is laid out by hand and checked against asammdf's reading of it.
+   reads them with Mdf4Net and compares. Two files (raw_virtual_group, raw_remote_master) hold
+   constructs neither writer produces with record-oriented data; they are laid out by hand and
+   checked against asammdf's reading of them.
 
 asammdf is the most widely used open MDF implementation and is independent of this code base, so
 agreement in both directions is the strongest conformance evidence available without the ASAM
@@ -310,6 +311,53 @@ def write_asammdf_files(directory: Path, count: int = 2500) -> None:
     ]}))
 
     write_virtual_group(directory, cycles=4)
+    write_remote_master_group(directory)
+
+
+class RawBlocks:
+    """Lays out an MDF file block by block, for constructs no writer in reach produces. Blocks
+    are named; a link is the name of another block or 0."""
+
+    def __init__(self):
+        self.blocks = []  # (name, block id, links, data)
+
+    def block(self, name, block_id, links, data):
+        self.blocks.append((name, block_id, links, data))
+
+    def text(self, name, value):
+        raw = value.encode() + b'\0'
+        self.block(name, b'##TX', [], raw + b'\0' * (-len(raw) % 8))
+
+    def linear(self, name, factor, offset):
+        # cc_type, precision, flags, ref count, value count, physical range, then b and a.
+        self.block(name, b'##CC', [0, 0, 0, 0], struct.pack('<BBHHHdddd', 1, 0, 0, 0, 2, 0, 0, offset, factor))
+
+    def channel(self, name, next_channel, label, channel_type, sync_type, conversion, byte_offset=0, bit_count=0):
+        # cn_type, sync type, data type (unsigned LE), bit offset, byte offset, bit count, flags,
+        # invalidation bit, precision, reserved, attachment count, then six range doubles.
+        data = struct.pack('<BBBBIIIIBBH', channel_type, sync_type, 0, 0, byte_offset, bit_count, 0, 0, 0, 0, 0) + bytes(48)
+        self.block(name, b'##CN', [next_channel, 0, label, 0, conversion, 0, 0, 0], data)
+
+    def channel_group(self, name, first_channel, cycles, data_bytes, flags=0, master_group=None):
+        # record id, cycle count, flags, path separator, reserved, data bytes, invalidation bytes.
+        # With the remote master flag (bit 3) the block carries the seventh link, cg_cg_master.
+        links = [0, first_channel, 0, 0, 0, 0] + ([master_group] if master_group else [])
+        self.block(name, b'##CG', links, struct.pack('<QQHHIII', 0, cycles, flags, 0, 0, data_bytes, 0))
+
+    def write(self, path: Path, version: str) -> None:
+        """Writes the blocks in order, each starting at a multiple of 8 bytes."""
+        offsets, position = {}, 64
+        for name, _, links, data in self.blocks:
+            offsets[name] = position
+            position += 24 + 8 * len(links) + len(data)
+            position += -position % 8
+        number = int(version.replace('.', ''))
+        out = bytearray(b'MDF     ' + version.ljust(8).encode() + b'rawbytes' + bytes(4) + struct.pack('<H', number) + bytes(34))
+        for _, block_id, links, data in self.blocks:
+            out += block_id + bytes(4) + struct.pack('<QQ', 24 + 8 * len(links) + len(data), len(links))
+            out += struct.pack(f'<{len(links)}Q', *[offsets[link] if link else 0 for link in links]) + data
+            out += bytes(-len(out) % 8)
+        path.write_bytes(bytes(out))
 
 
 def write_virtual_group(directory: Path, cycles: int) -> None:
@@ -317,46 +365,18 @@ def write_virtual_group(directory: Path, cycles: int) -> None:
     (index * 0.5 s) and a virtual data channel (index * 2 + 1). The cycle count alone gives the
     number of samples. Neither writer produces such a group through its public API, so the blocks
     are laid out here by hand; asammdf's reading of the master is the cross-check."""
-    blocks = []  # (name, block id, links as block names or 0, data)
-
-    def block(name, block_id, links, data):
-        blocks.append((name, block_id, links, data))
-
-    def text(name, value):
-        raw = value.encode() + b'\0'
-        block(name, b'##TX', [], raw + b'\0' * (-len(raw) % 8))
-
-    def linear(name, factor, offset):
-        # cc_type, precision, flags, ref count, value count, physical range, then b and a.
-        block(name, b'##CC', [0, 0, 0, 0], struct.pack('<BBHHHdddd', 1, 0, 0, 0, 2, 0, 0, offset, factor))
-
-    def channel(name, next_channel, label, channel_type, sync_type, conversion):
-        # cn_type, sync type, data type (unsigned LE), bit offset, byte offset, bit count, flags,
-        # invalidation bit, precision, reserved, attachment count, then six range doubles.
-        data = struct.pack('<BBBBIIIIBBH', channel_type, sync_type, 0, 0, 0, 0, 0, 0, 0, 0, 0) + bytes(48)
-        block(name, b'##CN', [next_channel, 0, label, 0, conversion, 0, 0, 0], data)
-
-    block('hd', b'##HD', ['dg', 0, 0, 0, 0, 0], bytes(32))
-    block('dg', b'##DG', [0, 'cg', 0, 0], bytes(8))
-    # record id, cycle count, flags, path separator, reserved, data bytes, invalidation bytes.
-    block('cg', b'##CG', [0, 'cn_time', 0, 0, 0, 0], struct.pack('<QQHHIII', 0, cycles, 0, 0, 0, 0, 0))
-    channel('cn_time', 'cn_index', 'tx_time', 3, 1, 'cc_time')  # virtual master, time
-    channel('cn_index', 0, 'tx_index', 6, 0, 'cc_index')  # virtual data
-    text('tx_time', 'v_time')
-    text('tx_index', 'v_index')
-    linear('cc_time', 0.5, 0.0)
-    linear('cc_index', 2.0, 1.0)
-
-    offsets, position = {}, 64
-    for name, _, links, data in blocks:
-        offsets[name] = position
-        position += 24 + 8 * len(links) + len(data)
-    out = bytearray(b'MDF     4.10    rawbytes' + bytes(4) + struct.pack('<H', 410) + bytes(34))
-    for _, block_id, links, data in blocks:
-        out += block_id + bytes(4) + struct.pack('<QQ', 24 + 8 * len(links) + len(data), len(links))
-        out += struct.pack(f'<{len(links)}Q', *[offsets[link] if link else 0 for link in links]) + data
+    raw = RawBlocks()
+    raw.block('hd', b'##HD', ['dg', 0, 0, 0, 0, 0], bytes(32))
+    raw.block('dg', b'##DG', [0, 'cg', 0, 0], bytes(8))
+    raw.channel_group('cg', 'cn_time', cycles, 0)
+    raw.channel('cn_time', 'cn_index', 'tx_time', 3, 1, 'cc_time')  # virtual master, time
+    raw.channel('cn_index', 0, 'tx_index', 6, 0, 'cc_index')  # virtual data
+    raw.text('tx_time', 'v_time')
+    raw.text('tx_index', 'v_index')
+    raw.linear('cc_time', 0.5, 0.0)
+    raw.linear('cc_index', 2.0, 1.0)
     mf4 = directory / 'raw_virtual_group.mf4'
-    mf4.write_bytes(bytes(out))
+    raw.write(mf4, '4.10')
 
     index = np.arange(cycles, dtype=np.float64)
     mdf = MDF(str(mf4))
@@ -371,6 +391,53 @@ def write_virtual_group(directory: Path, cycles: int) -> None:
     (directory / 'raw_virtual_group.json').write_text(json.dumps({'channels': [
         expectation(0, 'v_time', index * 0.5, index * 0.5),
         expectation(0, 'v_index', index * 0.5, index * 2 + 1),
+    ]}))
+
+
+def write_remote_master_group(directory: Path) -> None:
+    """An MDF 4.20 file whose second channel group takes its master from the first (cg_flags bit
+    3, cg_cg_master): the master group holds the time (raw 2, 3, 4 at 0.25 s: 0.5, 0.75, 1.0 s),
+    the remote group holds r_value (10, 20, 30) and no master channel of its own, and a third
+    group (r_chain: 1, 2, 3) refers to the second, so its master is two links away. asammdf
+    reads such groups but writes them only with column-oriented storage, so the file is laid out
+    by hand; asammdf's reading of the two remote groups' master is the cross-check."""
+    raw = RawBlocks()
+    raw.block('hd', b'##HD', ['dg_master', 0, 0, 0, 0, 0], bytes(32))
+    raw.block('dg_master', b'##DG', ['dg_remote', 'cg_master', 'dt_master', 0], bytes(8))
+    raw.channel_group('cg_master', 'cn_time', 3, 1)
+    raw.channel('cn_time', 0, 'tx_time', 2, 1, 'cc_time', bit_count=8)  # master, time
+    raw.text('tx_time', 'r_time')
+    raw.linear('cc_time', 0.25, 0.0)
+    raw.block('dt_master', b'##DT', [], bytes([2, 3, 4]))
+    raw.block('dg_remote', b'##DG', ['dg_chain', 'cg_remote', 'dt_remote', 0], bytes(8))
+    raw.channel_group('cg_remote', 'cn_value', 3, 1, flags=1 << 3, master_group='cg_master')
+    raw.channel('cn_value', 0, 'tx_value', 0, 0, 0, bit_count=8)  # fixed-length, no conversion
+    raw.text('tx_value', 'r_value')
+    raw.block('dt_remote', b'##DT', [], bytes([10, 20, 30]))
+    raw.block('dg_chain', b'##DG', [0, 'cg_chain', 'dt_chain', 0], bytes(8))
+    raw.channel_group('cg_chain', 'cn_chain', 3, 1, flags=1 << 3, master_group='cg_remote')
+    raw.channel('cn_chain', 0, 'tx_chain', 0, 0, 0, bit_count=8)
+    raw.text('tx_chain', 'r_chain')
+    raw.block('dt_chain', b'##DT', [], bytes([1, 2, 3]))
+    mf4 = directory / 'raw_remote_master.mf4'
+    raw.write(mf4, '4.20')
+
+    timestamps = [0.5, 0.75, 1.0]
+    wanted = {'r_value': [10, 20, 30], 'r_chain': [1, 2, 3]}
+    mdf = MDF(str(mf4))
+    try:
+        for group, name in ((1, 'r_value'), (2, 'r_chain')):
+            master = list(mdf.get_master(group))
+            signal = mdf.get(name, group=group)
+            read = (master, list(signal.timestamps), list(signal.samples))
+            if read != (timestamps, timestamps, wanted[name]):
+                raise SystemExit(f'asammdf reads remote master group {group} as {read}, expected {(timestamps, timestamps, wanted[name])}')
+    finally:
+        mdf.close()
+    (directory / 'raw_remote_master.json').write_text(json.dumps({'channels': [
+        expectation(0, 'r_time', timestamps, timestamps),
+        expectation(1, 'r_value', timestamps, wanted['r_value']),
+        expectation(2, 'r_chain', timestamps, wanted['r_chain']),
     ]}))
 
 

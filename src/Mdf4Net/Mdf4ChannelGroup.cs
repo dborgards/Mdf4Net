@@ -13,6 +13,7 @@ public sealed class Mdf4ChannelGroup
     private readonly List<Mdf4Channel> _channels = new();
     private readonly List<Mdf4Channel> _allChannels = new();
     private readonly Dictionary<long, Mdf4Channel> _byOffset = new();
+    private readonly long _masterGroupLink;
 
     internal Mdf4ChannelGroup(Mdf4DataGroup dataGroup, RawBlock block, int index, HashSet<long> visited)
     {
@@ -32,6 +33,7 @@ public sealed class Mdf4ChannelGroup
         Name = TextBlocks.ReadText(reader, block.Link(2));
         Source = Mdf4SourceInformation.Read(reader, block.Link(3));
         Comment = TextBlocks.ReadText(reader, block.Link(5));
+        _masterGroupLink = block.Link(6);
 
         if (IsVariableLengthSignalData)
         {
@@ -119,8 +121,22 @@ public sealed class Mdf4ChannelGroup
     /// <summary>All channels including composition members, depth first.</summary>
     public IReadOnlyList<Mdf4Channel> AllChannels => _allChannels;
 
-    /// <summary>The master channel (time, angle, distance or index), if the group has one.</summary>
+    /// <summary>The group's own master channel (time, angle, distance or index), if it has one.</summary>
     public Mdf4Channel? MasterChannel { get; }
+
+    /// <summary>
+    /// The channel group whose master channel this group uses, if the group takes its master
+    /// from another group (<see cref="Mdf4ChannelGroupFlags.RemoteMaster"/>, MDF 4.20). A chain
+    /// of such references is followed to the group that holds the master channel, which may be
+    /// in another data group. Null if the group has its own master channel or none.
+    /// </summary>
+    public Mdf4ChannelGroup? RemoteMasterGroup { get; private set; }
+
+    /// <summary>
+    /// The master channel that applies to this group's records: its own, or that of
+    /// <see cref="RemoteMasterGroup"/>. Null if the group has neither.
+    /// </summary>
+    public Mdf4Channel? ResolvedMasterChannel => MasterChannel ?? RemoteMasterGroup?.MasterChannel;
 
     internal ulong VariableLengthDataSize { get; }
 
@@ -130,27 +146,38 @@ public sealed class Mdf4ChannelGroup
     public Mdf4Channel? FindChannel(string name) => _allChannels.FirstOrDefault(c => c.Name == name);
 
     /// <summary>
-    /// The master channel's values, converted to physical units (normally seconds). For a group
-    /// without any master channel, the zero-based record index.
+    /// The master channel's values, converted to physical units (normally seconds), one per
+    /// record of this group. For a group with a <see cref="RemoteMasterGroup"/> these are that
+    /// group's values, which must be as many as this group has records. For a group without any
+    /// master channel, the zero-based record index.
     /// </summary>
-    /// <exception cref="NotSupportedException">
-    /// The group takes its master from another group (<see cref="Mdf4ChannelGroupFlags.RemoteMaster"/>),
-    /// which this library does not resolve.
-    /// </exception>
-    public double[] ReadTimestamps()
-    {
-        if (MasterChannel is null && (Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
-        {
-            throw new NotSupportedException($"Channel group '{Name}' uses the master channel of another group (remote master), which is not supported.");
-        }
+    public double[] ReadTimestamps() => ReadTimestamps(invalid: null);
 
+    /// <summary>
+    /// <see cref="ReadTimestamps()"/>, also recording per record whether the master sample is
+    /// invalid (never for record indices).
+    /// </summary>
+    internal double[] ReadTimestamps(List<bool>? invalid)
+    {
         if (MasterChannel is not null)
         {
             MasterChannel.EnsureUsableAsMaster();
-            return MasterChannel.ReadDoubles();
+            return MasterChannel.ReadDoubles(invalid);
         }
 
         long count = CountRecords();
+        if (RemoteMasterGroup is not null)
+        {
+            double[] remote = RemoteMasterGroup.ReadTimestamps(invalid);
+            if (remote.Length != count)
+            {
+                throw RecordCountMismatch(count, remote.Length);
+            }
+
+            return remote;
+        }
+
+        invalid?.AddRange(Enumerable.Repeat(false, (int)count));
         var result = new double[count];
         for (long i = 0; i < count; i++)
         {
@@ -187,6 +214,14 @@ public sealed class Mdf4ChannelGroup
         }
     }
 
+    /// <summary>
+    /// The i-th record takes the i-th value of the remote master; a group with more or fewer
+    /// records than its master group has values is inconsistent, and neither cutting the records
+    /// short nor padding the time stamps makes it consistent.
+    /// </summary>
+    internal Mdf4FormatException RecordCountMismatch(long records, int masterValues)
+        => Mdf4FormatException.At(Offset, $"Channel group has {records} records, its remote master group has {masterValues} master values");
+
     internal Mdf4Channel? ChannelAt(long offset) => _byOffset.TryGetValue(offset, out Mdf4Channel? channel) ? channel : null;
 
     internal void ResolveLinks()
@@ -194,6 +229,60 @@ public sealed class Mdf4ChannelGroup
         foreach (Mdf4Channel channel in _allChannels)
         {
             channel.ResolveDataLink();
+        }
+    }
+
+    /// <summary>
+    /// Follows <c>cg_cg_master</c> to the group that holds the master channel. Runs once every
+    /// data group is loaded, since the master group may come later in the file.
+    /// </summary>
+    internal void ResolveRemoteMaster()
+    {
+        if ((Flags & Mdf4ChannelGroupFlags.RemoteMaster) == 0)
+        {
+            return;
+        }
+
+        if (MasterChannel is not null)
+        {
+            throw Mdf4FormatException.At(Offset, "Channel group has a master channel of its own and refers to a remote master group; which one applies is ambiguous");
+        }
+
+        // Every group on the chain is visited at most once, so a cycle is found and the walk ends.
+        var visited = new HashSet<long> { Offset };
+        Mdf4ChannelGroup group = this;
+        while (true)
+        {
+            if (group._masterGroupLink == 0)
+            {
+                throw Mdf4FormatException.At(group.Offset, "Channel group is flagged as using a remote master but has no cg_cg_master link");
+            }
+
+            if (!visited.Add(group._masterGroupLink))
+            {
+                throw Mdf4FormatException.At(Offset, "The remote master chain of the channel group loops back on itself");
+            }
+
+            Mdf4ChannelGroup target = DataGroup.File.FindChannelGroup(group._masterGroupLink)
+                ?? throw Mdf4FormatException.At(group.Offset, $"cg_cg_master link 0x{group._masterGroupLink:X} does not refer to a channel group of the file");
+            if (target.IsVariableLengthSignalData)
+            {
+                throw Mdf4FormatException.At(group.Offset, "Channel group refers to a VLSD channel group as its remote master group");
+            }
+
+            if ((target.Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
+            {
+                group = target;
+                continue;
+            }
+
+            if (target.MasterChannel is null)
+            {
+                throw Mdf4FormatException.At(group.Offset, "Channel group refers to a remote master group that has no master channel");
+            }
+
+            RemoteMasterGroup = target;
+            return;
         }
     }
 

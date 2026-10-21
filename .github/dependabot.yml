@@ -76,3 +76,10 @@ updates:
       interval: monthly
     commit-message:
       prefix: "ci(deps)"
+    groups:
+      # init and analyze have to run the same CodeQL Action version, otherwise the analyze step
+      # fails ("Loaded a configuration file for version ..., but running version ..."), so a
+      # separate bump of either half (#4, #6) can never pass CI on its own.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

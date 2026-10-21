@@ -1,0 +1,23 @@
+# One line ending everywhere, matching .editorconfig's `end_of_line = lf` for [*]
+# and what is actually committed: every blob in this repository is LF.
+* text=auto eol=lf
+
+*.cs        text diff=csharp
+*.csproj    text
+*.sln       text
+*.props     text
+*.targets   text
+*.md        text
+*.yml       text
+*.yaml      text
+*.json      text
+*.ps1       text
+*.sh        text eol=lf
+
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.dll       binary
+*.snk       binary
+*.mf4       binary
+*.mdf       binary

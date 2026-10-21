@@ -1,0 +1,1173 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using AwesomeAssertions;
+using Mdf4Net.BusLogging;
+using Mdf4Net.Internal;
+using Mdf4Net.Tests.Infrastructure;
+using Xunit;
+
+namespace Mdf4Net.Tests;
+
+/// <summary>
+/// The reader's contract for hostile input (SECURITY.md): a malformed file produces
+/// <see cref="Mdf4FormatException"/> (or <see cref="NotSupportedException"/> for an unsupported
+/// but well-formed construct), never another exception type, a hang, or an allocation driven by
+/// a length field.
+/// </summary>
+public class RobustnessTests
+{
+    private static readonly Lazy<byte[]> Sample = new(BuildSample);
+
+    public static IEnumerable<object[]> Seeds() => Enumerable.Range(0, 8).Select(i => new object[] { i });
+
+    [Fact]
+    public void Every_Truncation_Is_Rejected_Cleanly()
+    {
+        byte[] full = Sample.Value;
+        for (int length = 0; length < full.Length; length += 3)
+        {
+            ExpectCleanOutcome(full.AsSpan(0, length).ToArray(), $"truncated to {length} bytes");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void Random_Corruption_Is_Rejected_Cleanly(int seed)
+    {
+        byte[] full = Sample.Value;
+        var random = new Random(seed);
+        for (int round = 0; round < 250; round++)
+        {
+            byte[] corrupt = (byte[])full.Clone();
+            int flips = 1 + random.Next(6);
+            for (int i = 0; i < flips; i++)
+            {
+                int position = random.Next(corrupt.Length);
+                corrupt[position] = random.Next(3) switch
+                {
+                    0 => (byte)random.Next(256),
+                    1 => 0xFF,
+                    _ => 0x00,
+                };
+            }
+
+            ExpectCleanOutcome(corrupt, $"seed {seed}, round {round}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void Corrupt_Unsorted_Files_Are_Rejected_Cleanly(int seed)
+    {
+        byte[] full = UnsortedReaderTests.BuildUnsorted(2, out _, out _);
+        var random = new Random(seed + 1000);
+        for (int round = 0; round < 250; round++)
+        {
+            byte[] corrupt = (byte[])full.Clone();
+            corrupt[random.Next(corrupt.Length)] = (byte)random.Next(256);
+            corrupt[random.Next(corrupt.Length)] = (byte)random.Next(256);
+            ExpectCleanOutcome(corrupt, $"seed {seed}, round {round}");
+        }
+    }
+
+    [Fact]
+    public void Corrupted_Link_Fields_Are_Rejected_Cleanly()
+    {
+        // Point every link of every block at every other block in turn: type confusion, cycles,
+        // links into the middle of blocks.
+        byte[] full = Sample.Value;
+        List<long> blocks = BlockOffsets(full);
+        var random = new Random(42);
+        foreach (long block in blocks)
+        {
+            long linkCount = BinaryPrimitives.ReadInt64LittleEndian(full.AsSpan((int)block + 16));
+            for (int link = 0; link < linkCount; link++)
+            {
+                IEnumerable<long> targets = Enumerable.Range(0, 8).Select(_ => blocks[random.Next(blocks.Count)])
+                    .Concat(new long[] { block, block + 8, 64, full.Length - 8, long.MaxValue, -64 });
+                foreach (long target in targets)
+                {
+                    byte[] corrupt = (byte[])full.Clone();
+                    BinaryPrimitives.WriteInt64LittleEndian(corrupt.AsSpan((int)block + 24 + (link * 8)), target);
+                    ExpectCleanOutcome(corrupt, $"link {link} of block 0x{block:X} -> 0x{target:X}");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void A_Channel_Chain_That_Loops_Is_Detected()
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("loop", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        channel.Links[0] = channel;
+        PendingBlock cg = raw.ChannelGroup(0, 0, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, null));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*loops*");
+    }
+
+    [Fact]
+    public void Shared_Conversion_References_Are_Parsed_Once()
+    {
+        // Twenty value-to-text levels, each referring twice to the same next level: expanded per
+        // reference that is 2^20 parses from a file of a few kilobytes.
+        const int Levels = 20;
+        var raw = new RawMdf();
+        PendingBlock next = raw.Linear(2, 0);
+        for (int level = 0; level < Levels; level++)
+        {
+            var data = new byte[24 + 8];
+            data[0] = (byte)Mdf4ConversionType.ValueToText;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+            next = raw.Block("##CC", new object?[] { null, null, null, null, next, next }, data);
+        }
+
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: next);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4Conversion? conversion = file.FindChannel("v")!.Conversion;
+        for (int level = 0; level < Levels; level++)
+        {
+            conversion!.References.Should().HaveCount(2);
+            conversion.References[0].Should().BeSameAs(conversion.References[1], $"level {level} refers twice to one block");
+            conversion = conversion.References[0] as Mdf4Conversion;
+        }
+
+        conversion!.Type.Should().Be(Mdf4ConversionType.Linear);
+        file.FindChannel("v")!.ReadValues().Should().Equal(0.0);
+    }
+
+    [Theory]
+    [InlineData(2, 3, false)]
+    [InlineData(2, 4, true)]
+    [InlineData(32, 40, true)]
+    public void Conversion_Chains_Assembled_From_Cached_Parts_Respect_MaxNestingDepth(int maxDepth, int levels, bool rejected)
+    {
+        // Channel k uses conversion k, which refers to conversion k-1. Read in channel order, each
+        // parse finds its successor in the cache and recurses only one level, while the chain
+        // itself grows with every channel.
+        var raw = new RawMdf();
+        PendingBlock previous = raw.Linear(2, 0);
+        PendingBlock? channels = raw.Channel("c0", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: previous);
+        PendingBlock first = channels;
+        for (int level = 1; level < levels; level++)
+        {
+            var data = new byte[24 + 8];
+            data[0] = (byte)Mdf4ConversionType.ValueToText;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+            previous = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("x"), previous }, data);
+            PendingBlock channel = raw.Channel("c" + level, Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: previous);
+            channels.Links[0] = channel;
+            channels = channel;
+        }
+
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, first);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 3 })));
+
+        Action open = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxNestingDepth = maxDepth });
+            MdfTestFile.ReadEverything(file);
+        };
+        if (rejected)
+        {
+            open.Should().Throw<Mdf4FormatException>().WithMessage("*MaxNestingDepth*");
+        }
+        else
+        {
+            open.Should().NotThrow();
+        }
+    }
+
+    [Fact]
+    public void A_Forged_Transposition_Column_Count_Does_Not_Drive_The_Untransposition()
+    {
+        // Sixteen DZ blocks with one byte each and a column count of int.MaxValue: no complete
+        // row, so nothing is transposed. Iterating over the column count instead costs about a
+        // second per block; the bound below leaves an order of magnitude to the fixed code's
+        // milliseconds and to a loaded runner.
+        const int Blocks = 16;
+        var raw = new RawMdf();
+        var links = new object?[Blocks + 1];
+        var list = new byte[8 + (Blocks * 8)];
+        BinaryPrimitives.WriteUInt32LittleEndian(list.AsSpan(4), Blocks);
+        for (int i = 0; i < Blocks; i++)
+        {
+            byte[] compressed = Zlib.Compress(new[] { (byte)i }, 0, 1);
+            var fields = new byte[24 + compressed.Length];
+            System.Text.Encoding.ASCII.GetBytes("DT", 0, 2, fields, 0);
+            fields[2] = 1;
+            BinaryPrimitives.WriteUInt32LittleEndian(fields.AsSpan(4), int.MaxValue);
+            BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(8), 1);
+            BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(16), (ulong)compressed.Length);
+            compressed.CopyTo(fields, 24);
+            links[i + 1] = raw.Block("##DZ", Array.Empty<object?>(), fields);
+            BinaryPrimitives.WriteInt64LittleEndian(list.AsSpan(8 + (i * 8)), i);
+        }
+
+        PendingBlock dl = raw.Block("##DL", links, list);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        PendingBlock cg = raw.ChannelGroup(0, Blocks, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.Block("##HL", new object?[] { dl }, new byte[] { 0, 0, 1, 0, 0, 0, 0, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        file.FindChannel("v")!.ReadDoubles().Should().Equal(Enumerable.Range(0, Blocks).Select(i => (double)i));
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+    }
+
+    [Theory]
+    [InlineData(2, new byte[] { 1, 0, 2 }, "middle of a record")]
+    [InlineData(3, new byte[] { 1, 0, 2, 0 }, "declares 3 records")]
+    public void A_Finalized_File_Whose_Data_Ends_Early_Is_A_Format_Error(ulong cycles, byte[] data, string message)
+    {
+        var raw = new RawMdf();
+        PendingBlock value = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 16);
+        PendingBlock cg = raw.ChannelGroup(0, cycles, 2, 0, value);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(data)));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*{message}*");
+    }
+
+    [Fact]
+    public void An_Unsorted_Finalized_File_Cut_After_A_Record_Id_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock value = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        PendingBlock cg = raw.ChannelGroup(1, 5, 1, 0, value);
+        byte[] bytes = raw.Build(raw.DataGroup(1, cg, raw.DataBlock(new byte[] { 1, 7, 1 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*middle of a record*");
+    }
+
+    [Fact]
+    public void A_Value_To_Text_Table_Nesting_A_Text_Input_Conversion_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        var textToValue = new byte[24 + 8];
+        textToValue[0] = (byte)Mdf4ConversionType.TextToValue;
+        BinaryPrimitives.WriteUInt16LittleEndian(textToValue.AsSpan(6), 1);
+        PendingBlock inner = raw.Block("##CC", new object?[4], textToValue);
+
+        var valueToText = new byte[24 + 8];
+        valueToText[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(valueToText.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(valueToText.AsSpan(6), 1);
+        PendingBlock outer = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("zero"), inner }, valueToText);
+
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: outer);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 3 })));
+
+        Action open = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            file.FindChannel("v")!.ReadValues();
+        };
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*takes a text*");
+    }
+
+    [Fact]
+    public void Channels_Sharing_Signal_Data_Load_It_Once()
+    {
+        // Forty VLSD channels point at one SD block. The file budget allows that block once and
+        // a little more: loading it per channel would exceed it at the second channel.
+        const int Channels = 40;
+        byte[] signal = SignalData(64 * 1024);
+        var raw = new RawMdf();
+        PendingBlock sd = raw.Block("##SD", Array.Empty<object?>(), signal);
+        PendingBlock? next = null;
+        for (int i = Channels - 1; i >= 0; i--)
+        {
+            next = raw.Channel("s" + i, Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, (uint)(i * 8), 64, next: next, data: sd);
+        }
+
+        PendingBlock cg = raw.ChannelGroup(0, 1, Channels * 8, 0, next);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[Channels * 8])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxSignalDataSize = signal.Length + 1024 });
+        foreach (Mdf4Channel channel in file.Channels)
+        {
+            channel.ReadValues().Single().Should().BeOfType<byte[]>().Which.Should().HaveCount(signal.Length - 4);
+        }
+    }
+
+    [Fact]
+    public void The_Signal_Data_Budget_Covers_The_Whole_File()
+    {
+        byte[] signal = SignalData(64 * 1024);
+        var raw = new RawMdf();
+        PendingBlock second = raw.Channel("b", Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, 8, 64, data: raw.Block("##SD", Array.Empty<object?>(), signal));
+        PendingBlock first = raw.Channel("a", Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, 0, 64, next: second, data: raw.Block("##SD", Array.Empty<object?>(), signal));
+        PendingBlock cg = raw.ChannelGroup(0, 1, 16, 0, first);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[16])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxSignalDataSize = signal.Length * 3 / 2 });
+        file.FindChannel("a")!.ReadValues().Should().ContainSingle();
+        Action second_ = () => file.FindChannel("b")!.ReadValues();
+        second_.Should().Throw<Mdf4FormatException>().WithMessage("*MaxSignalDataSize*");
+    }
+
+    private static byte[] SignalData(int size)
+    {
+        // One SD entry: a 4-byte length and the bytes.
+        var data = new byte[size];
+        BinaryPrimitives.WriteUInt32LittleEndian(data, (uint)(size - 4));
+        return data;
+    }
+
+    [Theory]
+    [InlineData(Mdf4ConversionType.Linear, 0, 0)]
+    [InlineData(Mdf4ConversionType.Linear, 1, 0)]
+    [InlineData(Mdf4ConversionType.Rational, 2, 0)]
+    [InlineData(Mdf4ConversionType.ValueToValueInterpolated, 3, 0)]
+    [InlineData(Mdf4ConversionType.ValueToValue, 0, 0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 3, 0)]
+    [InlineData(Mdf4ConversionType.ValueToText, 2, 2)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, 3, 2)]
+    [InlineData(Mdf4ConversionType.TextToValue, 1, 1)]
+    [InlineData(Mdf4ConversionType.TextToText, 0, 2)]
+    [InlineData(Mdf4ConversionType.TextToText, 1, 1)]
+    [InlineData(Mdf4ConversionType.Identity, 1, 0)]
+    [InlineData(Mdf4ConversionType.Identity, 0, 1)]
+    [InlineData(Mdf4ConversionType.Linear, 2, 1)]
+    [InlineData(Mdf4ConversionType.Rational, 6, 1)]
+    [InlineData(Mdf4ConversionType.Algebraic, 0, 0)]
+    [InlineData(Mdf4ConversionType.Algebraic, 1, 1)]
+    [InlineData(Mdf4ConversionType.ValueToValue, 2, 1)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 1, 1)]
+    [InlineData(Mdf4ConversionType.BitfieldText, 1, 2)]
+    [InlineData(Mdf4ConversionType.BitfieldText, 0, 0)]
+    public void A_Conversion_Without_The_Parameters_Of_Its_Type_Is_A_Format_Error(Mdf4ConversionType type, int values, int references)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + (values * 8)];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)references);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)values);
+
+        // The references point at a block that is neither a text nor a conversion: the shape is
+        // refused before any of them is followed.
+        PendingBlock notAText = raw.DataBlock(new byte[8]);
+        var links = new object?[4 + references];
+        for (int i = 0; i < references; i++)
+        {
+            links[4 + i] = notAText;
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: conversion);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 7 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage($"*{type} conversion cannot have*");
+    }
+
+    [Theory]
+    [InlineData(Mdf4ConversionType.TextToValue, 1, 2, 0)]
+    [InlineData(Mdf4ConversionType.TextToText, 3, 0, 1)]
+    [InlineData(Mdf4ConversionType.Algebraic, 1, 0, 0)]
+    public void A_Text_Input_Or_Formula_Conversion_Referring_To_A_Conversion_Is_A_Format_Error(Mdf4ConversionType type, int references, int values, int conversionAt)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + (values * 8)];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)references);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)values);
+        var links = new object?[4 + references];
+        for (int i = 0; i < references; i++)
+        {
+            links[4 + i] = i == conversionAt ? raw.Linear(1, 0) : raw.Text("t" + i);
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.StringLatin1, 0, 8, conversion: conversion);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0x41 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage($"*{type} conversion cannot refer to a conversion*");
+    }
+
+    [Fact]
+    public void A_Group_Of_Virtual_Channels_Yields_Its_Declared_Records()
+    {
+        byte[] bytes = VirtualGroup(cycles: 4);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4ChannelGroup group = file.ChannelGroups.Single();
+        group.ReadTimestamps().Should().Equal(0.0, 0.5, 1.0, 1.5);
+        file.FindChannel("index")!.ReadValues().Should().Equal(1.0, 3.0, 5.0, 7.0);
+    }
+
+    [Theory]
+    [InlineData(1001UL, 1000L)]
+    [InlineData(ulong.MaxValue, 16L * 1024 * 1024)]
+    public void A_Virtual_Group_Declaring_More_Records_Than_Allowed_Is_A_Format_Error(ulong cycles, long allowed)
+    {
+        // No record bytes are stored, so the cycle count alone would decide what is produced.
+        byte[] bytes = VirtualGroup(cycles);
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxVirtualRecordCount = allowed });
+        Action read = () => file.ChannelGroups.Single().ReadTimestamps();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*MaxVirtualRecordCount*");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_Stored_Channel_In_A_Group_Without_Record_Bytes_Is_A_Format_Error(bool withVirtualMaster)
+    {
+        // A fixed-length channel of zero bits: no record bytes, and nothing it could be read from.
+        var raw = new RawMdf();
+        PendingBlock stored = raw.Channel("s", Mdf4ChannelType.FixedLength, Mdf4DataType.StringUtf8, 0, 0);
+        PendingBlock first = withVirtualMaster
+            ? raw.Channel("t", Mdf4ChannelType.VirtualMaster, Mdf4DataType.UnsignedIntegerLe, 0, 0, next: stored, sync: Mdf4SyncType.Time)
+            : stored;
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 2, 0, 0, first), null));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.FindChannel("s")!.ReadValues())).Should().Throw<Mdf4FormatException>();
+        if (withVirtualMaster)
+        {
+            // The time stamps come from the virtual master alone; the group check still refuses them.
+            ((Action)(() => file.ChannelGroups.Single().ReadTimestamps())).Should().Throw<Mdf4FormatException>().WithMessage("*records hold no bytes*");
+        }
+    }
+
+    [Theory]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxMetadataBlockSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxDecompressedBlockSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxSignalDataSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxRecordSize))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxVirtualRecordCount))]
+    [InlineData(nameof(Mdf4ReaderOptions.MaxNestingDepth))]
+    public void A_Negative_Reader_Limit_Is_Refused_Instead_Of_Disabling_It(string limit)
+    {
+        Mdf4ReaderOptions options = limit switch
+        {
+            nameof(Mdf4ReaderOptions.MaxMetadataBlockSize) => new() { MaxMetadataBlockSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxDecompressedBlockSize) => new() { MaxDecompressedBlockSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxSignalDataSize) => new() { MaxSignalDataSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxRecordSize) => new() { MaxRecordSize = -1 },
+            nameof(Mdf4ReaderOptions.MaxVirtualRecordCount) => new() { MaxVirtualRecordCount = -1 },
+            _ => new() { MaxNestingDepth = -1 },
+        };
+
+        Action open = () => MdfTestFile.Open(VirtualGroup(cycles: 3), options).Dispose();
+        open.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(limit);
+    }
+
+    private static byte[] VirtualGroup(ulong cycles)
+    {
+        var raw = new RawMdf();
+        PendingBlock index = raw.Channel("index", Mdf4ChannelType.VirtualData, Mdf4DataType.UnsignedIntegerLe, 0, 0, conversion: raw.Linear(2, 1));
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.VirtualMaster, Mdf4DataType.UnsignedIntegerLe, 0, 0, next: index, sync: Mdf4SyncType.Time, conversion: raw.Linear(0.5, 0));
+        PendingBlock cg = raw.ChannelGroup(0, cycles, 0, 0, time);
+        return raw.Build(raw.DataGroup(0, cg, null));
+    }
+
+    [Theory]
+    [InlineData(Mdf4DataType.FloatLe, 32)]
+    [InlineData(Mdf4DataType.StringUtf8, 32)]
+    [InlineData(Mdf4DataType.ByteArray, 32)]
+    [InlineData(Mdf4DataType.ComplexLe, 64)]
+    public void A_Bit_Offset_On_A_Non_Integer_Channel_Is_A_Format_Error(Mdf4DataType dataType, uint bitCount)
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, dataType, 0, bitCount, bitOffset: 3);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0, 0xC0, 0x3F, 0, 0, 0, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*bit offset*");
+    }
+
+    [Fact]
+    public void A_Master_Channel_With_A_Text_Conversion_Is_A_Format_Error_On_Both_Read_Paths()
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 8];
+        data[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+        PendingBlock text = raw.Block("##CC", new object?[] { null, null, null, null, raw.Text("zero"), raw.Text("other") }, data);
+
+        // A plain group and a CAN_DataFrame group, each with a UInt8 time master that converts to text.
+        PendingBlock plainMaster = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, sync: Mdf4SyncType.Time, conversion: text);
+        PendingBlock plain = raw.ChannelGroup(0, 1, 1, 0, plainMaster);
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 5, 64, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 29, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 96, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock canMaster = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time, conversion: text);
+        PendingBlock can = raw.ChannelGroup(0, 1, 13, 0, canMaster, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        PendingBlock canGroup = raw.DataGroup(0, can, raw.DataBlock(new byte[13]));
+        byte[] bytes = raw.Build(raw.DataGroup(0, plain, raw.DataBlock(new byte[] { 1 }), next: canGroup));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.ChannelGroups.First().ReadTimestamps())).Should().Throw<Mdf4FormatException>().WithMessage("*does not yield numbers*");
+        Mdf4ChannelGroup canGroupRead = file.ChannelGroups.Last();
+        canGroupRead.IsCanDataFrameGroup().Should().BeTrue();
+        ((Action)(() => canGroupRead.ReadCanDataFrames().ToList())).Should().Throw<Mdf4FormatException>().WithMessage("*does not yield numbers*");
+    }
+
+    [Theory]
+    [InlineData("DataBytes", Mdf4DataType.StringUtf8)]
+    [InlineData("ID", Mdf4DataType.FloatLe)]
+    public void A_Can_Data_Frame_Group_With_The_Wrong_Field_Types_Is_A_Format_Error(string field, Mdf4DataType dataType)
+    {
+        // t u8 @0, CAN_DataFrame @1: ID @1 (32 bits), DataBytes @5 (3 bytes) = 01 02 03.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, field == "DataBytes" ? dataType : Mdf4DataType.ByteArray, 5, 24, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, field == "ID" ? dataType : Mdf4DataType.UnsignedIntegerLe, 1, 32, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 56, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0x23, 0x01, 0, 0, 1, 2, 3 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.ChannelGroups.Single().IsCanDataFrameGroup().Should().BeTrue();
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*'CAN_DataFrame.{field}' is a FixedLength {dataType} channel*");
+    }
+
+    [Theory]
+    [InlineData("DataBytes", Mdf4DataType.ByteArray)]
+    [InlineData("ID", Mdf4DataType.UnsignedIntegerLe)]
+    public void A_Can_Data_Frame_Field_That_Is_Not_Stored_Is_A_Format_Error(string field, Mdf4DataType dataType)
+    {
+        // A virtual channel yields the record index, not a payload or an identifier.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", field == "DataBytes" ? Mdf4ChannelType.VirtualData : Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 5, 24, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", field == "ID" ? Mdf4ChannelType.VirtualData : Mdf4ChannelType.FixedLength, dataType == Mdf4DataType.ByteArray ? Mdf4DataType.UnsignedIntegerLe : dataType, 1, 32, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 56, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0x23, 0x01, 0, 0, 1, 2, 3 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*'CAN_DataFrame.{field}' is a VirtualData*");
+    }
+
+    [Theory]
+    [InlineData(255, false)]
+    [InlineData(9, false)]
+    [InlineData(10, true)]
+    [InlineData(13, true)]
+    [InlineData(16, true)]
+    public void A_Can_Data_Length_The_Payload_Field_Cannot_Hold_Is_A_Format_Error(byte dataLength, bool fd)
+    {
+        byte[] bytes = CanFrameWithDataLength(dataLength, fd);
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*declares {dataLength} data bytes*");
+    }
+
+    [Fact]
+    public void A_Can_Data_Length_The_Payload_Field_Holds_Is_Read()
+    {
+        using Mdf4File file = MdfTestFile.Open(CanFrameWithDataLength(12, fd: true));
+        file.ReadCanDataFrames().Single().Data.Length.Should().Be(12);
+    }
+
+    private static byte[] CanFrameWithDataLength(byte dataLength, bool fd)
+    {
+        // t u8 @0, ID u32 @1, DataLength u8 @5, EDL u8 @6, DataBytes 12 bytes @7.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 7, 96, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock edl = raw.Channel("CAN_DataFrame.EDL", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 6, 1, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock length = raw.Channel("CAN_DataFrame.DataLength", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 5, 8, next: edl, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: length, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 144, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 19, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        var record = new byte[19];
+        record[1] = 0x23;
+        record[2] = 0x01;
+        record[5] = dataLength;
+        record[6] = (byte)(fd ? 1 : 0);
+        return raw.Build(raw.DataGroup(0, cg, raw.DataBlock(record)));
+    }
+
+    [Fact]
+    public void Invalid_Can_Frame_Fields_Agree_With_The_Generic_Reader()
+    {
+        // t u8 @0, ID u32 @1, DLC u8 @5, DataBytes 3 bytes @6, invalidation byte @9:
+        // bit 0 = ID invalid, bit 1 = DLC invalid.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 6, 24, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock dlc = raw.Channel("CAN_DataFrame.DLC", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 5, 4, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent | Mdf4ChannelFlags.InvalidationBitValid, invalidationBit: 1);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: dlc, flags: Mdf4ChannelFlags.BusEvent | Mdf4ChannelFlags.InvalidationBitValid, invalidationBit: 0);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 64, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 3, 9, 1, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] records =
+        {
+            0, 0x23, 0x01, 0, 0, 1, 1, 2, 3, 0x01, // ID invalid: not a frame
+            1, 0x24, 0x01, 0, 0, 1, 4, 5, 6, 0x02, // DLC invalid: as if there were no DLC
+            2, 0x25, 0x01, 0, 0, 1, 7, 8, 9, 0x00, // DLC 1
+        };
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(records)));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        file.FindChannel("CAN_DataFrame.ID")!.ReadValues().Should().Equal(null, (double)0x124, (double)0x125);
+        IReadOnlyList<CanDataFrame> frames = file.ReadCanDataFrames();
+        frames.Select(f => f.Id).Should().Equal(0x124u, 0x125u);
+        frames[0].Data.ToArray().Should().Equal(4, 5, 6);
+        frames[1].Data.ToArray().Should().Equal(7);
+    }
+
+    [Theory]
+    [InlineData(255, Mdf4DataType.UnsignedIntegerLe, false)]
+    [InlineData(0, (Mdf4DataType)255, false)]
+    [InlineData(255, Mdf4DataType.UnsignedIntegerLe, true)]
+    [InlineData(0, (Mdf4DataType)255, true)]
+    public void A_Channel_Of_An_Unknown_Type_Is_Listed_But_Not_Read(byte channelType, Mdf4DataType dataType, bool allValuesInvalid)
+    {
+        // "All values invalid" must not let an unknown type pass as a channel of null samples.
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", (Mdf4ChannelType)channelType, dataType, 0, 8, flags: allValuesInvalid ? Mdf4ChannelFlags.AllValuesInvalid : Mdf4ChannelFlags.None);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 7 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4Channel v = file.FindChannel("v")!;
+        ((Action)(() => v.ReadValues())).Should().Throw<NotSupportedException>().WithMessage("*not supported*");
+        ((Action)(() => v.ReadRawValues())).Should().Throw<NotSupportedException>();
+        ((Action)(() => v.ReadDoubles())).Should().Throw<NotSupportedException>();
+    }
+
+    [Theory]
+    [InlineData(Mdf4DataType.StringUtf8, 9)]
+    [InlineData(Mdf4DataType.ByteArray, 12)]
+    [InlineData(Mdf4DataType.StringUtf16Le, 24)]
+    [InlineData(Mdf4DataType.CanOpenDate, 48)]
+    [InlineData(Mdf4DataType.CanOpenTime, 56)]
+    [InlineData(Mdf4DataType.ComplexLe, 48)]
+    [InlineData(Mdf4DataType.ByteArray, 0)]
+    [InlineData(Mdf4DataType.StringUtf16Le, 0)]
+    public void A_Byte_Field_That_Is_Not_A_Whole_Field_Is_A_Format_Error(Mdf4DataType dataType, uint bitCount)
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, dataType, 0, bitCount);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 8, 0, channel), raw.DataBlock(new byte[] { 0x41, 1, 0, 0, 0, 0, 0, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*{bitCount} bits, which is not a whole {dataType} field*");
+    }
+
+    [Fact]
+    public void A_Utf16_Value_Of_An_Odd_Number_Of_Bytes_Is_A_Format_Error()
+    {
+        // frame: UTF-16 LE, at most 4 bytes @0, its size u8 @4 = 3.
+        var raw = new RawMdf();
+        PendingBlock size = raw.Channel("size", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 4, 8);
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.StringUtf16Le, 0, 32, next: size, data: size);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 5, 0, frame), raw.DataBlock(new byte[] { 0x41, 0, 0x42, 0, 3 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("frame")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*odd number of bytes (3)*");
+    }
+
+    [Theory]
+    [InlineData(Mdf4DataType.ByteArray, 0u, 0u)]
+    [InlineData(Mdf4DataType.UnsignedIntegerLe, 0u, 0u)]
+    [InlineData(Mdf4DataType.UnsignedIntegerLe, 65u, 0u)]
+    [InlineData(Mdf4DataType.FloatLe, 24u, 0u)]
+    [InlineData(Mdf4DataType.UnsignedIntegerLe, 8u, 5u)]
+    [InlineData(Mdf4DataType.ByteArray, 0x80000000u, 0u)]
+    [InlineData(Mdf4DataType.StringUtf8, 0xFFFFFFF8u, 0u)]
+    public void All_Values_Invalid_Does_Not_Excuse_A_Broken_Layout(Mdf4DataType dataType, uint bitCount, uint byteOffset)
+    {
+        // A one-byte record; the channel is flagged "all values invalid" and still broken.
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, dataType, byteOffset, bitCount, flags: Mdf4ChannelFlags.AllValuesInvalid);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 7 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Mdf4Channel v = file.FindChannel("v")!;
+        ((Action)(() => v.ReadValues())).Should().Throw<Mdf4FormatException>();
+        ((Action)(() => v.ReadRawValues())).Should().Throw<Mdf4FormatException>();
+        if (v.IsNumeric)
+        {
+            ((Action)(() => v.ReadDoubles())).Should().Throw<Mdf4FormatException>();
+        }
+    }
+
+    [Fact]
+    public void An_Invalidation_Bit_Outside_The_Invalidation_Bytes_Is_A_Format_Error_Before_Any_Record()
+    {
+        // One invalidation byte, bit 9 declared; no records at all.
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, flags: Mdf4ChannelFlags.InvalidationBitValid, invalidationBit: 9);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 0, 1, 1, channel), null));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.FindChannel("v")!.ReadValues())).Should().Throw<Mdf4FormatException>().WithMessage("*Invalidation bit*outside*");
+    }
+
+    [Theory]
+    [InlineData((byte)0, typeof(Mdf4FormatException))]
+    [InlineData((byte)255, typeof(NotSupportedException))]
+    public void A_Master_Without_A_Known_Sync_Type_Yields_No_Time_Stamps(byte syncType, Type expected)
+    {
+        var raw = new RawMdf();
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, sync: (Mdf4SyncType)syncType);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, time), raw.DataBlock(new byte[] { 3 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ChannelGroups.Single().ReadTimestamps();
+        read.Should().Throw<Exception>().Which.Should().BeOfType(expected);
+    }
+
+    [Theory]
+    [InlineData(Mdf4ChannelType.VariableLength)]
+    [InlineData(Mdf4ChannelType.MaximumLength)]
+    public void A_Variable_Length_Channel_Of_A_Number_Type_Is_A_Format_Error(Mdf4ChannelType type)
+    {
+        // Variable-length storage holds strings and bytes; a number there would be read as bytes.
+        var raw = new RawMdf();
+        PendingBlock size = raw.Channel("size", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 8, 8);
+        PendingBlock value = raw.Channel("v", type, Mdf4DataType.UnsignedIntegerLe, 0, 64, next: size, data: type == Mdf4ChannelType.MaximumLength ? size : null);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 9, 0, value), raw.DataBlock(new byte[9])));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.FindChannel("v")!.ReadValues())).Should().Throw<Mdf4FormatException>().WithMessage("*not stored as variable-length data*");
+    }
+
+    [Theory]
+    [InlineData((byte)0x11)]
+    [InlineData((byte)0xFF)]
+    public void A_Can_Data_Length_Code_Above_15_Is_A_Format_Error(byte dlc)
+    {
+        // t u8 @0, ID u32 @1, DLC u8 @5 (eight bits, so it can hold more than 15), DataBytes 8 bytes @6.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 6, 64, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock dlcChannel = raw.Channel("CAN_DataFrame.DLC", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 5, 8, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: dlcChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 104, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 14, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0x23, 0x01, 0, 0, dlc, 1, 2, 3, 4, 5, 6, 7, 8 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage($"*data length code {dlc}*");
+    }
+
+    [Fact]
+    public void A_Maximum_Length_Channel_Without_A_Size_Link_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 4, 0, frame), raw.DataBlock(new byte[] { 1, 2, 0, 0 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*has no size channel*");
+    }
+
+    [Theory]
+    [InlineData(5, false)]
+    [InlineData(255, false)]
+    [InlineData(-1, true)]
+    public void A_Maximum_Length_Size_Outside_The_Field_Is_A_Format_Error(int size, bool signed)
+    {
+        // frame: four reserved bytes @0, size @4 (u8 or i8).
+        var raw = new RawMdf();
+        PendingBlock sizeChannel = raw.Channel("size", Mdf4ChannelType.FixedLength, signed ? Mdf4DataType.SignedIntegerLe : Mdf4DataType.UnsignedIntegerLe, 4, 8);
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32, next: sizeChannel, data: sizeChannel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 5, 0, frame), raw.DataBlock(new byte[] { 1, 2, 3, 4, unchecked((byte)size) })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        ((Action)(() => file.FindChannel("frame")!.ReadValues())).Should().Throw<Mdf4FormatException>().WithMessage("*declares*bytes in a field of 4*");
+    }
+
+    [Theory]
+    [InlineData(0x40000123u)]
+    [InlineData(0x20000000u | 0x80000000u)]
+    public void A_Can_Identifier_With_Unknown_Bits_Is_A_Format_Error(uint rawId)
+    {
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 5, 8, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 40, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 6, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        var record = new byte[6];
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), rawId);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(record)));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*bits beyond the 29-bit identifier*");
+    }
+
+    [Fact]
+    public void A_Channel_Group_With_Two_Masters_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock t2 = raw.Channel("t2", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 1, 8, sync: Mdf4SyncType.Time);
+        PendingBlock t1 = raw.Channel("t1", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: t2, sync: Mdf4SyncType.Time);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 2, 0, t1), raw.DataBlock(new byte[] { 1, 2 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*2 master channels*");
+    }
+
+    [Fact]
+    public void A_Zlib_Window_Size_Above_RFC_1950_Is_Refused()
+    {
+        byte[] stream = Zlib.Compress(new byte[] { 1, 2, 3 }, 0, 3);
+        Zlib.Decompress(stream, 3, 0).Should().Equal(1, 2, 3);
+
+        // CINFO 15 (a 2 GiB window) with a matching FCHECK: the rest of the stream is intact.
+        stream[0] = 0xF8;
+        stream[1] = (byte)((31 - ((0xF8 << 8) % 31)) % 31);
+        Action read = () => Zlib.Decompress(stream, 3, 0);
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*not a zlib stream*");
+    }
+
+    [Fact]
+    public void A_Can_Bus_Channel_Above_255_Is_A_Format_Error()
+    {
+        // t u8 @0, ID u32 @1, BusChannel u16 @5 = 256, DataBytes 1 byte @7.
+        var raw = new RawMdf();
+        PendingBlock bytesChannel = raw.Channel("CAN_DataFrame.DataBytes", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 7, 8, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock bus = raw.Channel("CAN_DataFrame.BusChannel", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 5, 16, next: bytesChannel, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock id = raw.Channel("CAN_DataFrame.ID", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 1, 32, next: bus, flags: Mdf4ChannelFlags.BusEvent);
+        PendingBlock frame = raw.Channel("CAN_DataFrame", Mdf4ChannelType.FixedLength, Mdf4DataType.ByteArray, 1, 56, flags: Mdf4ChannelFlags.BusEvent, composition: id);
+        PendingBlock time = raw.Channel("t", Mdf4ChannelType.Master, Mdf4DataType.UnsignedIntegerLe, 0, 8, next: frame, sync: Mdf4SyncType.Time);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 8, 0, time, flags: (ushort)Mdf4ChannelGroupFlags.BusEvent);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, raw.DataBlock(new byte[] { 0, 0x23, 0x01, 0, 0, 0x00, 0x01, 0 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.ReadCanDataFrames();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*bus channel 256*");
+    }
+
+    [Theory]
+    [InlineData(4, 10.0, 0.0, 100.0, 0.0)]
+    [InlineData(5, 0.0, 0.0, 0.0, 1.0)]
+    public void A_Value_To_Value_Table_With_Keys_Out_Of_Order_Is_A_Format_Error(int type, double k1, double v1, double k2, double v2)
+    {
+        // Keys 10, 0 (type 4) or 0, 0 (type 5, a duplicate).
+        var raw = new RawMdf();
+        var data = new byte[24 + 32];
+        data[0] = (byte)type;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 4);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(24), k1);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(32), v1);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(40), type == 4 ? 0.0 : k1);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(48), v2 + k2 * 0);
+        PendingBlock conversion = raw.Block("##CC", new object?[4], data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: conversion);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 5 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*not strictly increasing*");
+    }
+
+    [Theory]
+    [InlineData(Mdf4DataType.StringUtf8, Mdf4ConversionType.Linear)]
+    [InlineData(Mdf4DataType.UnsignedIntegerLe, Mdf4ConversionType.TextToValue)]
+    [InlineData(Mdf4DataType.ByteArray, Mdf4ConversionType.Linear)]
+    public void A_Conversion_That_Does_Not_Fit_The_Channel_Is_A_Format_Error_Whatever_The_Samples(Mdf4DataType dataType, Mdf4ConversionType type)
+    {
+        foreach (bool allInvalid in new[] { false, true })
+        {
+            var raw = new RawMdf();
+            var data = new byte[24 + 16];
+            data[0] = (byte)type;
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 2);
+            var links = new object?[type == Mdf4ConversionType.Linear ? 4 : 5];
+            if (type != Mdf4ConversionType.Linear)
+            {
+                BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 1);
+                links[4] = raw.Text("k");
+            }
+
+            PendingBlock conversion = raw.Block("##CC", links, data);
+            PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, dataType, 0, 8, conversion: conversion, flags: allInvalid ? Mdf4ChannelFlags.AllValuesInvalid : Mdf4ChannelFlags.None);
+            byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 0x41 })));
+
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            ((Action)(() => file.FindChannel("v")!.ReadValues())).Should().Throw<Mdf4FormatException>();
+            file.FindChannel("v")!.ReadRawValues().Should().HaveCount(1);
+        }
+    }
+
+    [Theory]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, 10.0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, 10.0)]
+    [InlineData(Mdf4ConversionType.ValueRangeToValue, double.NaN)]
+    [InlineData(Mdf4ConversionType.ValueRangeToText, double.NaN)]
+    public void A_Range_Table_With_An_Inverted_Range_Is_A_Format_Error(Mdf4ConversionType type, double min)
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 32];
+        data[0] = (byte)type;
+        bool toText = type == Mdf4ConversionType.ValueRangeToText;
+
+        // One range 10..0 (inverted), then its output, then the default.
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)(toText ? 2 : 0));
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)(toText ? 2 : 4));
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(24), min);
+        BinaryPrimitives.WriteDoubleLittleEndian(data.AsSpan(32), 0);
+        var links = new object?[toText ? 6 : 4];
+        if (toText)
+        {
+            links[4] = raw.Text("in");
+            links[5] = raw.Text("other");
+        }
+
+        PendingBlock conversion = raw.Block("##CC", links, data);
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: conversion);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 5 })));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*has a range from*to 0*");
+    }
+
+    [Fact]
+    public void A_Variable_Length_Channel_Must_Link_To_Signal_Data_Whatever_The_Samples()
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.VariableLength, Mdf4DataType.StringUtf8, 0, 64, data: raw.Text("not signal data"), flags: Mdf4ChannelFlags.AllValuesInvalid);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 8, 0, channel), raw.DataBlock(new byte[8])));
+
+        Action read = () =>
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            file.FindChannel("v")!.ReadRawValues();
+        };
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*not to signal data*");
+    }
+
+    [Fact]
+    public void A_Stream_Is_Closed_When_Opening_A_Broken_File_Fails()
+    {
+        using var stream = new System.IO.MemoryStream(new byte[200]);
+        Action open = () => Mdf4File.Open(stream, leaveOpen: false);
+        open.Should().Throw<Mdf4FormatException>();
+        stream.CanRead.Should().BeFalse();
+
+        using var kept = new System.IO.MemoryStream(new byte[200]);
+        ((Action)(() => Mdf4File.Open(kept, leaveOpen: true))).Should().Throw<Mdf4FormatException>();
+        kept.CanRead.Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_Invalidation_Bit_Without_Invalidation_Bytes_Is_A_Format_Error()
+    {
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, flags: Mdf4ChannelFlags.InvalidationBitValid);
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 1, 0, channel), raw.DataBlock(new byte[] { 7 })));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*no invalidation bytes*");
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("float")]
+    [InlineData("itself")]
+    [InlineData("vlsd")]
+    [InlineData("virtual")]
+    public void A_Maximum_Length_Channel_Without_An_Integer_Size_Channel_Is_A_Format_Error(string target)
+    {
+        // frame: 4 bytes @0, size @4: f32, or an integer VLSD offset or virtual channel that holds
+        // no size in the record.
+        var raw = new RawMdf();
+        PendingBlock size = target switch
+        {
+            "vlsd" => raw.Channel("size", Mdf4ChannelType.VariableLength, Mdf4DataType.UnsignedIntegerLe, 4, 32),
+            "virtual" => raw.Channel("size", Mdf4ChannelType.VirtualData, Mdf4DataType.UnsignedIntegerLe, 0, 0),
+            _ => raw.Channel("size", Mdf4ChannelType.FixedLength, Mdf4DataType.FloatLe, 4, 32),
+        };
+        PendingBlock frame = raw.Channel("frame", Mdf4ChannelType.MaximumLength, Mdf4DataType.ByteArray, 0, 32, next: size);
+        frame.Links[5] = target switch
+        {
+            "text" => raw.Text("not a channel"),
+            "float" or "vlsd" or "virtual" => size,
+            _ => frame,
+        };
+        byte[] bytes = raw.Build(raw.DataGroup(0, raw.ChannelGroup(0, 1, 8, 0, frame), raw.DataBlock(new byte[8])));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*does not refer to an integer size channel*");
+    }
+
+    [Fact]
+    public void A_Conversion_That_Refers_To_Itself_Is_Detected()
+    {
+        var raw = new RawMdf();
+        var data = new byte[24 + 8];
+        data[0] = (byte)Mdf4ConversionType.ValueToText;
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), 1);
+        PendingBlock loop = raw.Block("##CC", new object?[6], data);
+        loop.Links[4] = loop;
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8, conversion: loop);
+        PendingBlock cg = raw.ChannelGroup(0, 0, 1, 0, channel);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, null));
+
+        Action open = () => MdfTestFile.Open(bytes).Dispose();
+        open.Should().Throw<Mdf4FormatException>().WithMessage("*refers back to itself*");
+    }
+
+    [Fact]
+    public void A_Decompression_Bomb_Is_Refused_Before_Inflating()
+    {
+        var fields = new byte[24 + 16];
+        Encoding.ASCII.GetBytes("DT", 0, 2, fields, 0);
+        BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(8), 1UL << 40);
+        BinaryPrimitives.WriteUInt64LittleEndian(fields.AsSpan(16), 16);
+
+        var raw = new RawMdf();
+        PendingBlock channel = raw.Channel("v", Mdf4ChannelType.FixedLength, Mdf4DataType.UnsignedIntegerLe, 0, 8);
+        PendingBlock cg = raw.ChannelGroup(0, 1, 1, 0, channel);
+        PendingBlock dz = raw.Block("##DZ", Array.Empty<object?>(), fields);
+        byte[] bytes = raw.Build(raw.DataGroup(0, cg, dz));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+        Action read = () => file.FindChannel("v")!.ReadDoubles();
+        read.Should().Throw<Mdf4FormatException>().WithMessage("*MaxDecompressedBlockSize*");
+    }
+
+    [Fact]
+    public void Allocation_Limits_Are_Honoured()
+    {
+        byte[] bytes = Sample.Value;
+
+        Action tinyBlocks = () => MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxMetadataBlockSize = 64 }).Dispose();
+        tinyBlocks.Should().Throw<Mdf4FormatException>().WithMessage("*MaxMetadataBlockSize*");
+
+        Action tinyRecords = () => MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxRecordSize = 4 }).Dispose();
+        tinyRecords.Should().Throw<Mdf4FormatException>().WithMessage("*MaxRecordSize*");
+
+        using Mdf4File file = MdfTestFile.Open(bytes, new Mdf4ReaderOptions { MaxSignalDataSize = 16 });
+        Action vlsd = () => file.FindChannel("text")!.ReadValues();
+        vlsd.Should().Throw<Mdf4FormatException>().WithMessage("*MaxSignalDataSize*");
+    }
+
+    [Fact]
+    public void A_Forged_Vlsd_Length_Does_Not_Allocate_What_It_Claims()
+    {
+        // A VLSD record claiming 1 GiB in a file of a few hundred bytes: the read must fail on the
+        // missing data (end of data), not allocate the claimed size first.
+        var raw = new RawMdf();
+        PendingBlock vlsdGroup = raw.ChannelGroup(2, 0, 0, 0, null, flags: 1);
+        PendingBlock text = raw.Channel("text", Mdf4ChannelType.VariableLength, Mdf4DataType.ByteArray, 0, 64, data: vlsdGroup);
+        PendingBlock cg = raw.ChannelGroup(1, 1, 8, 0, text, next: vlsdGroup);
+        // One sample record (id 1, offset 0), then the forged VLSD record (id 2).
+        var data = new byte[1 + 8 + 1 + 4 + 8];
+        data[0] = 1;
+        data[9] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(10), 1u << 30);
+        PendingBlock dt = raw.DataBlock(data);
+        byte[] bytes = raw.Build(raw.DataGroup(1, cg, dt));
+
+        using Mdf4File file = MdfTestFile.Open(bytes);
+#if NET
+        long before = GC.GetAllocatedBytesForCurrentThread();
+#endif
+        Action read = () => file.FindChannel("text")!.ReadValues();
+        read.Should().Throw<Mdf4FormatException>();
+#if NET
+        (GC.GetAllocatedBytesForCurrentThread() - before).Should().BeLessThan(64L * 1024 * 1024);
+#endif
+    }
+
+    [Fact]
+    public void Not_An_Mdf_File_Is_Rejected()
+    {
+        ((Action)(() => MdfTestFile.Open(Encoding.ASCII.GetBytes(new string('x', 200))).Dispose()))
+            .Should().Throw<Mdf4FormatException>().WithMessage("*identification*");
+
+        byte[] mdf3 = (byte[])Sample.Value.Clone();
+        BinaryPrimitives.WriteUInt16LittleEndian(mdf3.AsSpan(28), 330);
+        ((Action)(() => MdfTestFile.Open(mdf3).Dispose())).Should().Throw<Mdf4FormatException>().WithMessage("*330*");
+    }
+
+    private static void ExpectCleanOutcome(byte[] bytes, string because)
+    {
+        try
+        {
+            using Mdf4File file = MdfTestFile.Open(bytes);
+            MdfTestFile.ReadEverything(file);
+        }
+        catch (Mdf4FormatException)
+        {
+            // The contract: a malformed file is reported as a format error.
+        }
+        catch (NotSupportedException)
+        {
+            // Also within the contract: a well-formed construct the library does not implement.
+        }
+        catch (Exception ex)
+        {
+            throw new Xunit.Sdk.XunitException($"{because}: {ex.GetType().Name} escaped the reader: {ex}");
+        }
+    }
+
+    private static List<long> BlockOffsets(byte[] file)
+    {
+        var offsets = new List<long>();
+        for (int i = 64; i + 24 <= file.Length; i += 8)
+        {
+            if (file[i] == (byte)'#' && file[i + 1] == (byte)'#')
+            {
+                offsets.Add(i);
+                long length = BinaryPrimitives.ReadInt64LittleEndian(file.AsSpan(i + 8));
+                i += (int)((length + 7) & ~7L) - 8;
+            }
+        }
+
+        return offsets;
+    }
+
+    private static byte[] BuildSample() => MdfTestFile.Write(
+        writer =>
+        {
+            var definition = new Mdf4ChannelGroupDefinition("Sample") { Source = new Mdf4SourceDefinition("ECU", Mdf4SourceType.Ecu) };
+            definition.AddTime();
+            Mdf4ChannelDefinition value = definition.Add(new Mdf4ChannelDefinition("value", Mdf4DataType.SignedIntegerLe, 12) { Conversion = Mdf4ConversionDefinition.Linear(0.5, 1) });
+            Mdf4ChannelDefinition state = definition.Add(new Mdf4ChannelDefinition("state", Mdf4DataType.UnsignedIntegerLe, 8)
+            {
+                Conversion = Mdf4ConversionDefinition.ValueToText(new Dictionary<double, string> { [0] = "a", [1] = "b" }, "c"),
+            });
+            Mdf4ChannelDefinition text = definition.Add(Mdf4ChannelDefinition.VariableLengthString("text"));
+            Mdf4ChannelDefinition fixedText = definition.Add(Mdf4ChannelDefinition.String("fixed", 4));
+            Mdf4ChannelGroupWriter group = writer.AddChannelGroup(definition);
+            for (int i = 0; i < 40; i++)
+            {
+                group.BeginRecord(i * 0.1).Set(value, (long)(i - 20)).Set(state, (ulong)(i % 3)).Set(text, "t" + i).Set(fixedText, "f" + (i % 10)).Commit();
+            }
+
+            CanDataFrameWriter can = writer.AddCanDataFrameGroup();
+            for (int i = 0; i < 10; i++)
+            {
+                can.Write(i * 0.01, (uint)(0x100 + i), new byte[i % 9], busChannel: 1);
+            }
+        },
+        new Mdf4WriterOptions { Compression = Mdf4Compression.TransposedDeflate, DataBlockSize = 1024, Comment = "robustness" });
+}

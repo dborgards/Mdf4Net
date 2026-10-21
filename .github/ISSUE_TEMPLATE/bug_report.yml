@@ -1,0 +1,66 @@
+name: Bug report
+description: Mdf4Net reads or writes a file differently than it should.
+labels: ["type: bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Reading
+        - Writing
+        - CAN bus logging
+        - Packaging / build
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "1.2.3"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: .NET version and OS
+      placeholder: ".NET 10.0.1, Windows 11 / Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: other-tool
+    attributes:
+      label: Other tool involved
+      description: The tool that wrote the file, or that cannot read a file Mdf4Net wrote (name and version).
+      placeholder: "asammdf 8.8.27, CANape 22, a logger's firmware …"
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Include the exception and stack trace if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        The smallest code or file that shows the problem. A small .mf4 attached here is ideal —
+        unless it contains confidential measurement data, or the problem could be a security
+        issue (then see SECURITY.md).
+      render: csharp
+    validations:
+      required: true

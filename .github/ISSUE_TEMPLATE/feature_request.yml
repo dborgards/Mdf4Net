@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose support for an MDF feature or a new API.
+labels: ["type: feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation you are in, not the API you have in mind — the design follows from the problem.
+    validations:
+      required: true
+
+  - type: input
+    id: mdf-feature
+    attributes:
+      label: MDF construct involved, if any
+      placeholder: "e.g. CA arrays, DV/DI column storage, LIN bus logging, attachments, events"
+
+  - type: textarea
+    id: sketch
+    attributes:
+      label: How would it be used?
+      description: A short usage sketch, if you have one in mind.
+      render: csharp
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What are you doing today instead?

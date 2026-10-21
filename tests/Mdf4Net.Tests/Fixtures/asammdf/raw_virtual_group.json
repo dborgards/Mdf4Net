@@ -1,0 +1,1 @@
+{"channels": [{"group": 0, "name": "v_time", "unit": null, "timestamps": [0.0, 0.5, 1.0, 1.5], "values": [0.0, 0.5, 1.0, 1.5]}, {"group": 0, "name": "v_index", "unit": null, "timestamps": [0.0, 0.5, 1.0, 1.5], "values": [1.0, 3.0, 5.0, 7.0]}]}

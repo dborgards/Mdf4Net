@@ -146,7 +146,13 @@ public sealed class Mdf4Channel
     /// </summary>
     /// <exception cref="InvalidOperationException">The channel is not numeric, or its conversion produces texts.</exception>
     /// <exception cref="NotSupportedException">The conversion type is not supported.</exception>
-    public double[] ReadDoubles()
+    public double[] ReadDoubles() => ReadDoubles(invalid: null);
+
+    /// <summary>
+    /// <see cref="ReadDoubles()"/>, also recording per sample whether it is invalid, which a NaN
+    /// alone does not tell from a valid sample whose value is NaN.
+    /// </summary>
+    internal double[] ReadDoubles(List<bool>? invalid)
     {
         ValidateLayout();
         if (!IsNumeric)
@@ -175,7 +181,9 @@ public sealed class Mdf4Channel
         foreach (ArraySegment<byte> record in ChannelGroup.DataGroup.EnumerateRecords(ChannelGroup))
         {
             ReadOnlySpan<byte> span = record.AsSpan();
-            if (IsInvalid(span))
+            bool isInvalid = IsInvalid(span);
+            invalid?.Add(isInvalid);
+            if (isInvalid)
             {
                 result.Add(double.NaN);
             }

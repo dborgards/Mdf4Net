@@ -23,6 +23,7 @@ public sealed class Mdf4File : IDisposable
     private readonly bool _leaveOpen;
     private readonly List<Mdf4DataGroup> _dataGroups = new();
     private readonly List<Mdf4FileHistoryEntry> _fileHistory = new();
+    private readonly Dictionary<long, Mdf4ChannelGroup> _channelGroupsByOffset = new();
     private bool _disposed;
 
     private Mdf4File(Stream stream, bool leaveOpen, Mdf4ReaderOptions options)
@@ -210,7 +211,20 @@ public sealed class Mdf4File : IDisposable
             _dataGroups.Add(new Mdf4DataGroup(this, block, index++, visited));
             dg = block.Link(0);
         }
+
+        foreach (Mdf4ChannelGroup group in ChannelGroups)
+        {
+            _channelGroupsByOffset[group.Offset] = group;
+        }
+
+        foreach (Mdf4ChannelGroup group in ChannelGroups)
+        {
+            group.ResolveRemoteMaster();
+        }
     }
+
+    internal Mdf4ChannelGroup? FindChannelGroup(long offset)
+        => _channelGroupsByOffset.TryGetValue(offset, out Mdf4ChannelGroup? group) ? group : null;
 }
 
 /// <summary>One entry of the file history: who changed the file, when and with what.</summary>

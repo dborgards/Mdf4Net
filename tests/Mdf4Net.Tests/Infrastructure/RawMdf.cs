@@ -34,7 +34,12 @@ internal sealed class RawMdf
         return _meta.Add("##DG", new object?[] { next, firstChannelGroup, data, null }, bytes);
     }
 
-    public PendingBlock ChannelGroup(ulong recordId, ulong cycles, uint dataBytes, uint invalidationBytes, PendingBlock? firstChannel, string? name = null, ushort flags = 0, PendingBlock? next = null)
+    /// <summary>
+    /// A CG block. With the <see cref="Mdf4ChannelGroupFlags.RemoteMaster"/> flag the block has
+    /// the seventh link (<c>cg_cg_master</c>, MDF 4.20) pointing at <paramref name="masterGroup"/>;
+    /// the link stays settable afterwards through <see cref="PendingBlock.Links"/> for cycles.
+    /// </summary>
+    public PendingBlock ChannelGroup(ulong recordId, ulong cycles, uint dataBytes, uint invalidationBytes, PendingBlock? firstChannel, string? name = null, ushort flags = 0, PendingBlock? next = null, PendingBlock? masterGroup = null)
     {
         var data = new byte[32];
         BinaryPrimitives.WriteUInt64LittleEndian(data.AsSpan(0), recordId);
@@ -42,7 +47,11 @@ internal sealed class RawMdf
         BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(16), flags);
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(24), dataBytes);
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(28), invalidationBytes);
-        return _meta.Add("##CG", new object?[] { next, firstChannel, name is null ? null : Text(name), null, null, null }, data);
+        bool remoteMaster = (flags & (ushort)Mdf4ChannelGroupFlags.RemoteMaster) != 0;
+        object?[] links = remoteMaster
+            ? new object?[] { next, firstChannel, name is null ? null : Text(name), null, null, null, masterGroup }
+            : new object?[] { next, firstChannel, name is null ? null : Text(name), null, null, null };
+        return _meta.Add("##CG", links, data);
     }
 
     public PendingBlock Channel(

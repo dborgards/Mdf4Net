@@ -1,0 +1,1 @@
+{"channels": [{"group": 0, "name": "r_time", "unit": null, "timestamps": [0.5, 0.75, 1.0], "values": [0.5, 0.75, 1.0]}, {"group": 1, "name": "r_value", "unit": null, "timestamps": [0.5, 0.75, 1.0], "values": [10.0, 20.0, 30.0]}, {"group": 2, "name": "r_chain", "unit": null, "timestamps": [0.5, 0.75, 1.0], "values": [1.0, 2.0, 3.0]}]}

@@ -103,6 +103,7 @@ convention read it the same way.
 | Variable-length data: VLSD channel groups | ✅ | — |
 | Maximum-length channels, virtual master/data channels | ✅ | — |
 | Invalidation bits | ✅ | — |
+| Remote master channel groups (`cg_cg_master`, MDF 4.20) | ✅ | — |
 | Structures (CN compositions) | ✅ | ✅ |
 | Arrays (CA blocks) | flagged, not expanded | — |
 | Conversions: identity, linear, rational, value↔value tables, ranges, value/range→text, text→value, text→text, nested | ✅ | linear, rational, tables, ranges, value/range→text |

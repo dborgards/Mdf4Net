@@ -5,8 +5,9 @@
 
 The fixtures let the unit tests check the reader against files from an independent writer
 without needing Python at test time. They are the same files eng/interop/check_asammdf.py writes,
-with fewer samples (raw_virtual_group is laid out by hand and cross-checked with asammdf). Regenerate them when the asammdf pin in requirements.txt moves, and commit
-the result together with the pin.
+with fewer samples (raw_virtual_group and raw_remote_master are laid out by hand and
+cross-checked with asammdf). Regenerate them when the asammdf pin in requirements.txt moves, and
+commit the result together with the pin.
 """
 
 import sys

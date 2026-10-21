@@ -208,13 +208,17 @@ internal static class CanDataFrameReader
         Mdf4Channel? brsChannel = Find("BRS");
         Mdf4Channel? esiChannel = Find("ESI");
         Mdf4Channel? master = group.MasterChannel;
-        if (master is null && (group.Flags & Mdf4ChannelGroupFlags.RemoteMaster) != 0)
-        {
-            // Same rule as Mdf4ChannelGroup.ReadTimestamps: record indices are not the time stamps.
-            throw new NotSupportedException($"Channel group '{group.Name}' uses the master channel of another group (remote master), which is not supported.");
-        }
-
         master?.EnsureUsableAsMaster();
+        // A remote master (MDF 4.20) lives in another group's records, one value per record of
+        // this group; the record loop below checks that the counts agree, so the records are
+        // read once, not counted first as Mdf4ChannelGroup.ReadTimestamps does.
+        double[]? remote = null;
+        List<bool>? remoteInvalid = null;
+        if (group.RemoteMasterGroup is not null)
+        {
+            remoteInvalid = new List<bool>();
+            remote = group.RemoteMasterGroup.ReadTimestamps(remoteInvalid);
+        }
         Mdf4Channel? frameParent = id.Parent;
 
         // The ASAM bus logging layout: the payload is a stored byte array, the frame fields are
@@ -248,7 +252,13 @@ internal static class CanDataFrameReader
             byte[] record = segment.Array!;
             int count = segment.Count;
             ReadOnlySpan<byte> span = new(record, segment.Offset, count);
-            if (id.IsInvalid(span) || bytes.IsInvalid(span) || (master?.IsInvalid(span) ?? false) || (frame?.IsInvalid(span) ?? false))
+            if (remote is not null && index >= remote.Length)
+            {
+                throw group.RecordCountMismatch(group.CountRecords(), remote.Length);
+            }
+
+            if (id.IsInvalid(span) || bytes.IsInvalid(span) || (master?.IsInvalid(span) ?? false) || (frame?.IsInvalid(span) ?? false)
+                || (remoteInvalid is not null && remoteInvalid[(int)index]))
             {
                 index++;
                 continue;
@@ -258,7 +268,7 @@ internal static class CanDataFrameReader
             Mdf4Channel? ide = Valid(ideChannel), dlc = Valid(dlcChannel), length = Valid(lengthChannel), bus = Valid(busChannelField);
             Mdf4Channel? dir = Valid(dirChannel), edl = Valid(edlChannel), brs = Valid(brsChannel), esi = Valid(esiChannel);
 
-            double time = master is null ? index : Physical(master, span, index);
+            double time = master is not null ? Physical(master, span, index) : remote is not null ? remote[index] : index;
             ulong rawId = (ulong)id.DecodeRawNumber(span, index);
             if ((rawId & ~0x9FFFFFFFUL) != 0)
             {
@@ -309,6 +319,11 @@ internal static class CanDataFrameReader
 
             index++;
             yield return new CanDataFrame(time, frameId, data, flags, busChannel, direction);
+        }
+
+        if (remote is not null && index != remote.Length)
+        {
+            throw group.RecordCountMismatch(index, remote.Length);
         }
     }
 

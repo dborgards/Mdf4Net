@@ -257,8 +257,8 @@ internal static class CanDataFrameReader
                 throw group.RecordCountMismatch(group.CountRecords(), remote.Length);
             }
 
-            if (id.IsInvalid(span) || bytes.IsInvalid(span) || (master?.IsInvalid(span) ?? false) || (frame?.IsInvalid(span) ?? false)
-                || (remoteInvalid is not null && remoteInvalid[(int)index]))
+            bool timeInvalid = master is not null ? master.IsInvalid(span) : remoteInvalid is not null && remoteInvalid[(int)index];
+            if (timeInvalid || id.IsInvalid(span) || bytes.IsInvalid(span) || (frame?.IsInvalid(span) ?? false))
             {
                 index++;
                 continue;

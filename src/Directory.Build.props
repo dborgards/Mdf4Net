@@ -23,7 +23,7 @@
       a local `dotnet pack` given none, and the CI fallback `0.0.0-unversioned.<run>`.
     -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion>0.1.0</PackageValidationBaselineVersion>
     <NoWarn Condition="'$(Version)' == '' Or $(Version.StartsWith('0.0.0'))">$(NoWarn);CP0003</NoWarn>
   </PropertyGroup>
 

@@ -62,6 +62,6 @@ internal static class MdfTestFile
     {
         var all = new List<string> { AppContext.BaseDirectory, "Fixtures" };
         all.AddRange(parts);
-        return Path.Combine(all.ToArray());
+        return Path.Join(all.ToArray());
     }
 }

@@ -37,9 +37,9 @@ public class PublicApiSurfaceTests
     public void Public_Api_Surface_Matches_The_Approved_File()
     {
         string actual = typeof(Mdf4File).Assembly.GeneratePublicApi(RenderOptions);
-        string directory = Path.Combine(FindRepositoryRoot(), "tests", "Mdf4Net.Tests", "ApiApprovals");
-        string approvedPath = Path.Combine(directory, "Mdf4Net.approved.txt");
-        string receivedPath = Path.Combine(directory, "Mdf4Net.received.txt");
+        string directory = Path.Join(FindRepositoryRoot(), "tests", "Mdf4Net.Tests", "ApiApprovals");
+        string approvedPath = Path.Join(directory, "Mdf4Net.approved.txt");
+        string receivedPath = Path.Join(directory, "Mdf4Net.received.txt");
 
         if (!File.Exists(approvedPath))
         {
@@ -62,7 +62,7 @@ public class PublicApiSurfaceTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Mdf4Net.sln")))
+        while (directory is not null && !File.Exists(Path.Join(directory.FullName, "Mdf4Net.sln")))
         {
             directory = directory.Parent;
         }

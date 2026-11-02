@@ -23,9 +23,9 @@ switch (args[0])
         Directory.CreateDirectory(directory);
         foreach (Scenario scenario in Scenarios.All)
         {
-            string path = Path.Combine(directory, scenario.Name + ".mf4");
+            string path = Path.Join(directory, scenario.Name + ".mf4");
             Expectation expectation = scenario.Write(path);
-            expectation.Save(Path.Combine(directory, scenario.Name + ".json"));
+            expectation.Save(Path.Join(directory, scenario.Name + ".json"));
             Console.WriteLine($"wrote {scenario.Name}.mf4");
         }
 

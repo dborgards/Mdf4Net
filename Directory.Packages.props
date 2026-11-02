@@ -31,7 +31,7 @@
     <!-- Renders the approved public-API surface (PublicApiSurfaceTests). Test-only. -->
     <PackageVersion Include="PublicApiGenerator" Version="11.5.4" />
     <!-- Reads the expected-values JSON of the asammdf fixtures on the net48 leg (net10.0 has it in the BCL). -->
-    <PackageVersion Include="System.Text.Json" Version="10.0.12" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.14" />
   </ItemGroup>
 
 </Project>

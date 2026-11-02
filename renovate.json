@@ -2,5 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "isal (asammdf dependency) has no Python 3.15 wheels yet",
+      "matchDepNames": ["python"],
+      "allowedVersions": "<3.15"
+    }
   ]
 }

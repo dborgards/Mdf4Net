@@ -11,7 +11,13 @@
 
   <ItemGroup Label="Test">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
-    <PackageVersion Include="xunit" Version="2.9.3" />
+    <!--
+      xunit.v3.mtp-off is xUnit.net v3 without Microsoft.Testing.Platform. The default xunit.v3
+      metapackage pulls MTP 2, and the .NET 10 SDK then rejects the VSTest target that
+      coverlet.collector uses. xunit.runner.visualstudio stays the adapter `dotnet test` runs,
+      which is what the coverage upload reads.
+    -->
+    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <!--
       AwesomeAssertions, not FluentAssertions: from 8.0.0 on FluentAssertions ships under the Xceed

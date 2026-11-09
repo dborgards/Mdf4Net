@@ -17,7 +17,7 @@
       coverlet.collector uses. xunit.runner.visualstudio stays the adapter `dotnet test` runs,
       which is what the coverage upload reads.
     -->
-    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <!--
       AwesomeAssertions, not FluentAssertions: from 8.0.0 on FluentAssertions ships under the Xceed

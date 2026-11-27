@@ -12,9 +12,15 @@
       macOS a plain `dotnet test` runs net10.0 alone, and the Windows CI leg covers net48.
       Mdf4NetTestNetFrameworkLeg compile-checks the leg from anywhere:
         dotnet build tests/Mdf4Net.Tests -f net48 -p:Mdf4NetTestNetFrameworkLeg=true
+
+      Restore is different: packages.lock.json has to list every framework the Windows
+      CI job restores, or locked mode fails on Linux and macOS. MSBuildRestoreSessionId
+      is set only during restore, so the lock file always includes net48 while a plain
+      `dotnet test` on Linux or macOS still runs net10.0 alone.
+
     -->
     <TargetFrameworks>net10.0</TargetFrameworks>
-    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows')) OR '$(Mdf4NetTestNetFrameworkLeg)' == 'true'">net10.0;net48</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows')) OR '$(Mdf4NetTestNetFrameworkLeg)' == 'true' OR '$(MSBuildRestoreSessionId)' != ''">net10.0;net48</TargetFrameworks>
     <TestTfmsInParallel>false</TestTfmsInParallel>
     <!--
       xUnit.net v3 test projects are stand-alone executables. dotnet test still uses the VSTest

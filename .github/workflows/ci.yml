@@ -79,7 +79,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore Mdf4Net.sln
+        run: dotnet restore Mdf4Net.sln --locked-mode -p:Mdf4NetTestNetFrameworkLeg=true
 
       - name: Build
         run: dotnet build Mdf4Net.sln --configuration Release --no-restore -p:Version=${{ needs.version.outputs.semver }}
@@ -163,8 +163,11 @@ jobs:
           dotnet-version: 10.0.x
 
       # Proves the packing the release workflow's `verify` job does still works, on every PR.
+      - name: Restore
+        run: dotnet restore Mdf4Net.sln --locked-mode -p:Mdf4NetTestNetFrameworkLeg=true
+
       - name: Pack
-        run: dotnet pack Mdf4Net.sln --configuration Release -p:Version=${{ needs.version.outputs.semver }} --output artifacts/nuget
+        run: dotnet pack Mdf4Net.sln --configuration Release --no-restore -p:Version=${{ needs.version.outputs.semver }} --output artifacts/nuget
 
       - name: List produced packages
         run: ls -l artifacts/nuget

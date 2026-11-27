@@ -36,8 +36,11 @@ jobs:
           languages: csharp
           queries: security-and-quality
 
+      - name: Restore
+        run: dotnet restore Mdf4Net.sln --locked-mode -p:Mdf4NetTestNetFrameworkLeg=true
+
       - name: Build
-        run: dotnet build Mdf4Net.sln --configuration Release
+        run: dotnet build Mdf4Net.sln --configuration Release --no-restore
 
       - name: Analyze
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1

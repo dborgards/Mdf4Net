@@ -1,13 +1,25 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate updates NuGet packages and the global.json SDK pin (both via the nuget manager). npm, GitHub Actions, and pip stay with Dependabot.",
   "extends": [
     "config:recommended"
+  ],
+  "enabledManagers": [
+    "nuget"
   ],
   "packageRules": [
     {
       "description": "isal (asammdf dependency) has no Python 3.15 wheels yet",
-      "matchDepNames": ["python"],
+      "matchDepNames": [
+        "python"
+      ],
       "allowedVersions": "<3.15"
     }
-  ]
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ]
+  }
 }

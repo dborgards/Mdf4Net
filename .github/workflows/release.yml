@@ -113,7 +113,7 @@ jobs:
         run: node eng/verify-release-config.mjs ${{ steps.version.outputs.version }}
 
       - name: Restore
-        run: dotnet restore Mdf4Net.sln
+        run: dotnet restore Mdf4Net.sln --locked-mode -p:Mdf4NetTestNetFrameworkLeg=true
 
       - name: Build
         run: |

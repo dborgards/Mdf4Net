@@ -1,7 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate updates NuGet packages and the global.json SDK pin (both via the nuget manager). npm, GitHub Actions, and pip stay with Dependabot.",
   "extends": [
     "config:recommended"
+  ],
+  "enabledManagers": [
+    "nuget"
   ],
   "packageRules": [
     {

@@ -1,44 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: nuget
-    directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
-    commit-message:
-      # A shipped dependency moving is a change in the package, so .releaserc.json lets
-      # `build(deps)` publish a patch -- except for the `test-tooling` group below, which it
-      # recognises by that name in the subject. Rename the group and the rule in .releaserc.json
-      # has to follow; eng/verify-release-config.mjs checks the rule against a subject of this shape.
-      prefix: "build(deps)"
-    groups:
-      # Every package only tests/ references, plus the SBOM tool (it changes what the SBOMs say,
-      # not what the package contains). A test-only package left out of this list releases a patch
-      # nobody needs.
-      test-tooling:
-        patterns:
-          - "CycloneDX"
-          - "xunit*"
-          - "Microsoft.NET.Test.Sdk"
-          - "coverlet.*"
-          - "AwesomeAssertions"
-          - "Polyfill"
-          - "PublicApiGenerator"
-          - "System.Text.Json"
-      # The same packages for security updates, which a group covers only when it says so.
-      test-tooling-security:
-        applies-to: security-updates
-        patterns:
-          - "CycloneDX"
-          - "xunit*"
-          - "Microsoft.NET.Test.Sdk"
-          - "coverlet.*"
-          - "AwesomeAssertions"
-          - "Polyfill"
-          - "PublicApiGenerator"
-          - "System.Text.Json"
-
   - package-ecosystem: npm
     directory: "/"
     schedule:

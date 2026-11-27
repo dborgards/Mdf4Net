@@ -27,6 +27,12 @@
       adapter in xunit.runner.visualstudio; see the mtp-off note in Directory.Packages.props.
     -->
     <OutputType>Exe</OutputType>
+    <!--
+      Windows restore of net48 injects an implicit win-x86 RID, which NU1004s a lock file
+      written on Linux. Pin it during restore only so the lock file matches on every OS,
+      without changing the net48 build output path used by Windows CI tests.
+    -->
+    <RuntimeIdentifiers Condition="'$(TargetFramework)' == 'net48' AND '$(MSBuildRestoreSessionId)' != ''">win-x86</RuntimeIdentifiers>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -35,6 +41,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!-- Explicit so the net48 lock file does not depend on whether the host has the targeting pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Condition="'$(TargetFramework)' == 'net48'">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="xunit.v3.mtp-off" />
     <PackageReference Include="xunit.runner.visualstudio">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

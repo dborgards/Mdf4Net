@@ -21,6 +21,12 @@ updates:
       - dependency-name: "conventional-changelog-conventionalcommits"
         update-types: ["version-update:semver-major"]
 
+      # v26 requires Node >= 26.13, upgrades bundled npm to v12, and introduces a new
+      # @semantic-release/core engine plus a branch up-to-date check. Only a real release
+      # run exercises that, so bump deliberately with a dry run.
+      - dependency-name: "semantic-release"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: pip
     # eng/interop/requirements.txt: asammdf, the reference implementation of the interop check.
     # Not "build(deps)": it changes what the package is tested against, not what it contains.
